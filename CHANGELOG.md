@@ -17,6 +17,16 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 1.58 — Android: bottom tab bar
+
+- **New (Android): bottom `NavigationBar`** — Today / Trends / Live / Sleep as permanent tabs, plus a
+  **More** tab opening a `ModalBottomSheet` that renders the *same* `drawerGroups` the hamburger drawer
+  shows (verbatim — one source of truth, both routes reach every screen). The drawer is kept untouched
+  for reversibility; the bar is purely additive. The More tab lights up whenever the current screen
+  isn't one of the four tabs, so the bar never shows "nowhere". All navigation through the existing
+  `navigateTopLevel` (single-top + state save/restore — back behaves the same).
+- macOS: **version bump only.**
+
 ## 1.57 — Android home-screen widget
 
 - **New (Android): home-screen widget** — today's recovery (band-coloured 67/34), live HR and strap
