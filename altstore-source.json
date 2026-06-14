@@ -18,6 +18,15 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "2.16.0",
+          "buildVersion": "65",
+          "date": "2026-06-14",
+          "localizedDescription": "A round of look-and-feel polish",
+          "downloadURL": "https://github.com/NoopApp/noop/releases/download/v2.16.0/NOOP-v2.16.0-ios.ipa",
+          "size": 6518589,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "2.15.3",
           "buildVersion": "64",
           "date": "2026-06-14",
@@ -307,12 +316,12 @@
           "NSHealthUpdateUsageDescription": "NOOP writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
         }
       },
-      "version": "2.15.3",
-      "buildVersion": "64",
+      "version": "2.16.0",
+      "buildVersion": "65",
       "versionDate": "2026-06-14",
-      "versionDescription": "Android GPS route distance fix",
-      "downloadURL": "https://github.com/NoopApp/noop/releases/download/v2.15.3/NOOP-v2.15.3-ios.ipa",
-      "size": 6496729,
+      "versionDescription": "A round of look-and-feel polish",
+      "downloadURL": "https://github.com/NoopApp/noop/releases/download/v2.16.0/NOOP-v2.16.0-ios.ipa",
+      "size": 6518589,
       "minOSVersion": "17.0"
     }
   ],
