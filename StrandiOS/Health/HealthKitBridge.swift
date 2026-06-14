@@ -167,9 +167,6 @@ final class HealthKitBridge: ObservableObject {
                         recovery: nil, strain: nil, exerciseCount: nil,
                         spo2Pct: a.spo2, skinTempDevC: nil, respRateBpm: a.respRate)
         }
-        try? await store.upsertAppleDaily(appleRows, deviceId: appleDeviceId)
-        try? await store.upsertDailyMetrics(dmRows, deviceId: appleDeviceId)
-
         // Flatten to the generic metricSeries the shared Apple Health screen, the Today apple-health
         // sparklines, and the Metric Explorer read from — repo.series(key:source:"apple-health")
         // queries ONLY metricSeries, so without this every tile/chart renders "—" after a successful
@@ -197,17 +194,21 @@ final class HealthKitBridge: ObservableObject {
         }
         let points = AppleHealthAggregator.metricPoints(aggregates)
             .map { MetricPoint(day: $0.day, key: $0.key, value: $0.value) }
-        try? await store.upsertMetricSeries(points, deviceId: appleDeviceId)
 
-        // Only advance lastSync when the round-trip actually succeeded. A failed write-back used to
-        // be swallowed by `try?`, then lastSync moved forward — the next delta sync skipped the window
-        // and the data was never written back.
+        // Persist all the apple-health rows AND write back, advancing lastSync only when the WHOLE
+        // round-trip succeeds. The three read-side upserts used to be swallowed by `try?`, so a failed
+        // import (e.g. a disk-full GRDB write) dropped rows yet still cleared lastError and advanced
+        // lastSync — a false "success", and the next delta sync skipped the window. (Reimplemented
+        // from @vulnix0x4's PR #375.)
         do {
+            try await store.upsertAppleDaily(appleRows, deviceId: appleDeviceId)
+            try await store.upsertDailyMetrics(dmRows, deviceId: appleDeviceId)
+            try await store.upsertMetricSeries(points, deviceId: appleDeviceId)
             try await writeBack(whoopStore: store)
             lastSync = Date()
             lastError = nil
         } catch {
-            lastError = "Apple Health write-back failed: \(error.localizedDescription)"
+            lastError = "Apple Health sync failed: \(error.localizedDescription)"
         }
     }
 
@@ -295,12 +296,23 @@ final class HealthKitBridge: ObservableObject {
         var asleepMin: Double?; var deepMin: Double?; var remMin: Double?; var coreMin: Double?
     }
 
+    /// Excludes NOOP's own write-back samples from reads, so the two-way sync never reads its own
+    /// output back in as "apple-health" data — which would make the strap and "Apple Health" plot the
+    /// same line for a strap-only user, and bias the apple-health average for someone who also has a
+    /// watch. `HKSource.default()` is this app's own source. (Reimplemented from @vulnix0x4's PR #375.)
+    private static var notNoopAuthored: NSPredicate {
+        NSCompoundPredicate(notPredicateWithSubpredicate: HKQuery.predicateForObjects(from: [HKSource.default()]))
+    }
+
     private func collect(_ id: HKQuantityTypeIdentifier, unit: HKUnit, start: Date, end: Date,
                          op: HKStatisticsOptions, sink: @escaping (String, Double) -> Void) async {
         guard let type = HKQuantityType.quantityType(forIdentifier: id) else { return }
         let cal = Calendar.current
         let anchor = cal.startOfDay(for: start)
-        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        let predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate),
+            Self.notNoopAuthored,
+        ])
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             let q = HKStatisticsCollectionQuery(quantityType: type, quantitySamplePredicate: predicate,
                                                 options: op, anchorDate: anchor,
@@ -325,7 +337,10 @@ final class HealthKitBridge: ObservableObject {
     private func collectSleep(start: Date, end: Date,
                               sink: @escaping (String, Double?, Double?, Double?, Double?) -> Void) async {
         guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return }
-        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
+        let predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            HKQuery.predicateForSamples(withStart: start, end: end, options: []),
+            Self.notNoopAuthored,
+        ])
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             let q = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
                 var asleep: [String: Double] = [:], deep: [String: Double] = [:]
@@ -363,11 +378,14 @@ final class HealthKitBridge: ObservableObject {
     // matching local formatter is strictly 1:1; using UTC instead mislabelled a full local day
     // under the previous UTC date for users east of UTC, so apple-health rows never merged with
     // the strap-computed/imported rows for the same civil day.
-    private static let dayFormatter: DateFormatter = {
+    // `nonisolated` so the HealthKit query completion handlers — which HealthKit invokes on a private
+    // background queue (a nonisolated context) — can label day buckets without a main-actor-isolation
+    // warning. They only read a thread-safe DateFormatter, so this is safe off the main actor.
+    nonisolated private static let dayFormatter: DateFormatter = {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone.current; return f
     }()
-    private static func dayString(_ date: Date) -> String { dayFormatter.string(from: date) }
-    private static func date(from day: String) -> Date? { dayFormatter.date(from: day) }
+    nonisolated private static func dayString(_ date: Date) -> String { dayFormatter.string(from: date) }
+    nonisolated private static func date(from day: String) -> Date? { dayFormatter.date(from: day) }
 }
 #endif
