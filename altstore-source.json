@@ -18,6 +18,15 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "3.0.3",
+          "buildVersion": "78",
+          "date": "2026-06-14",
+          "localizedDescription": "Large Apple Health imports no longer crash (iPhone/Mac).",
+          "downloadURL": "https://github.com/NoopApp/noop/releases/download/v3.0.3/NOOP-v3.0.3-ios.ipa",
+          "size": 13689222,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "3.0.2",
           "buildVersion": "77",
           "date": "2026-06-14",
@@ -424,12 +433,12 @@
           "NSHealthUpdateUsageDescription": "NOOP writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
         }
       },
-      "version": "3.0.2",
-      "buildVersion": "77",
+      "version": "3.0.3",
+      "buildVersion": "78",
       "versionDate": "2026-06-14",
-      "versionDescription": "BLE stream-resync + Apple Health two-way-sync fixes.",
-      "downloadURL": "https://github.com/NoopApp/noop/releases/download/v3.0.2/NOOP-v3.0.2-ios.ipa",
-      "size": 13680371,
+      "versionDescription": "Large Apple Health imports no longer crash (iPhone/Mac).",
+      "downloadURL": "https://github.com/NoopApp/noop/releases/download/v3.0.3/NOOP-v3.0.3-ios.ipa",
+      "size": 13689222,
       "minOSVersion": "17.0"
     }
   ],
