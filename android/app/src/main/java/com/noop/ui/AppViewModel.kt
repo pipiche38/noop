@@ -117,6 +117,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Whether the illness early-warning runs (banner + notification). */
     val illnessWatchEnabled: StateFlow<Boolean> = _illnessWatchEnabled.asStateFlow()
 
+    // Battery alerts (low ≤15% + charge-complete 100%). Opt-OUT, default ON; the actual firing
+    // happens in BatteryAlertNotifier off the live-state stream — this flag just gates it (#368).
+    private val _batteryAlertsEnabled = MutableStateFlow(NoopPrefs.batteryAlerts(appContext))
+    /** Whether strap low/full battery notifications fire. */
+    val batteryAlertsEnabled: StateFlow<Boolean> = _batteryAlertsEnabled.asStateFlow()
+
     // Declared BEFORE the init block for the SAME reason as _illnessWatchEnabled above: the bond
     // collector launched from init runs synchronously on Main.immediate and reads _smartAlarmEnabled on
     // its first (cached) emission. A declaration after init is null there and NPEs the constructor on a
@@ -866,6 +872,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         NoopPrefs.setIllnessWatch(appContext, enabled)
         // Recompute now — the recentDays collector only fires on data changes.
         _healthAlert.value = if (enabled) IllnessWatch.evaluate(recentDays.value) else null
+    }
+
+    /** Toggle strap low/full battery notifications (#368). The notifier reads NoopPrefs on each
+     *  live-state update, so persisting is all that's needed — no stream to re-arm. */
+    fun setBatteryAlertsEnabled(enabled: Boolean) {
+        _batteryAlertsEnabled.value = enabled
+        NoopPrefs.setBatteryAlerts(appContext, enabled)
     }
 
     /** Arm or clear the strap's firmware alarm from the current setting, computing the next occurrence

@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "3.2.0"
+    static let currentVersion = "3.3.0"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,13 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "3.3.0",
+            title: "Strap battery alerts",
+            date: "June 2026",
+            items: [
+                "New: NOOP can now alert you when your WHOOP's battery runs **low (15% or below)** or finishes **charging (100%)** — a simple system notification so you don't get caught out before bed. It fires at most once per discharge and once per charge (a small re-arm band means a battery hovering near 15% won't nag you), and it's on by default — turn it off any time under Settings → Automations. All three platforms. Thanks @ujix (#368).",
+            ]),
         Release(
             version: "3.2.0",
             title: "Under-the-hood: current-API migration (no behaviour change)",

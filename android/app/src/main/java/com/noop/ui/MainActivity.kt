@@ -312,6 +312,37 @@ object NoopPrefs {
         of(context).edit().putString(KEY_ILLNESS_LAST_NOTIFIED_DAY, day).apply()
     }
 
+    /** Battery alerts — low (≤15%) + charge-complete (100%) strap notifications (#368, thanks @ujix).
+     *  Default ON; gated here and behind the OS notification permission. */
+    const val KEY_BATTERY_ALERTS = "noop.batteryAlerts"
+
+    fun batteryAlerts(context: Context): Boolean =
+        of(context).getBoolean(KEY_BATTERY_ALERTS, true)
+
+    fun setBatteryAlerts(context: Context, enabled: Boolean) {
+        of(context).edit().putBoolean(KEY_BATTERY_ALERTS, enabled).apply()
+    }
+
+    /** Persisted once-per-crossing flags behind BatteryAlertPolicy — they survive process death so a
+     *  battery hovering near a threshold fires exactly once per cycle (low re-arms above 25%, full
+     *  re-arms below 100%). */
+    const val KEY_BATTERY_LOW_ALERTED = "noop.batteryLowAlerted"
+    const val KEY_BATTERY_FULL_ALERTED = "noop.batteryFullAlerted"
+
+    fun batteryLowAlerted(context: Context): Boolean =
+        of(context).getBoolean(KEY_BATTERY_LOW_ALERTED, false)
+
+    fun setBatteryLowAlerted(context: Context, alerted: Boolean) {
+        of(context).edit().putBoolean(KEY_BATTERY_LOW_ALERTED, alerted).apply()
+    }
+
+    fun batteryFullAlerted(context: Context): Boolean =
+        of(context).getBoolean(KEY_BATTERY_FULL_ALERTED, false)
+
+    fun setBatteryFullAlerted(context: Context, alerted: Boolean) {
+        of(context).edit().putBoolean(KEY_BATTERY_FULL_ALERTED, alerted).apply()
+    }
+
     /** Whether the one-shot #313 full-history Effort rescore has run. Set true once it completes so the
      *  on-upgrade pass that regenerates deep-history strain on the 0–100 axis never re-runs. */
     const val KEY_EFFORT_RESCORE_DONE = "noop.effortRescore.v313.done"

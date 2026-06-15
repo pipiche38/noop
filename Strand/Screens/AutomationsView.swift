@@ -16,6 +16,7 @@ struct AutomationsView: View {
             coachingCard
             alarmCard
             illnessCard
+            batteryCard
         }
     }
 
@@ -162,6 +163,21 @@ struct AutomationsView: View {
                 .onChangeCompat(of: behavior.illnessWatch) { _ in
                     model.reevaluateIllness()
                     if behavior.illnessWatch { IllnessNotifier.requestAuthorization() }
+                }
+        }
+    }
+
+    // MARK: - Strap battery alerts
+
+    private var batteryCard: some View {
+        Section2(icon: "battery.25", title: "Battery alerts",
+                 blurb: "Get a notification when the strap battery runs low (15%) so you can top it up before tonight, and when it finishes charging.",
+                 active: behavior.batteryAlerts) {
+            ToggleRow(label: "Notify on low and full battery",
+                      help: "A reminder to recharge before bed when the strap drops to 15%, and a heads-up when it reaches 100% — each at most once per charge cycle.",
+                      isOn: $behavior.batteryAlerts)
+                .onChangeCompat(of: behavior.batteryAlerts) { on in
+                    if on { BatteryNotifier.requestAuthorization() }
                 }
         }
     }

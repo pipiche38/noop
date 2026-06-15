@@ -126,6 +126,15 @@ final class AppModel: ObservableObject {
             guard let self, self.behavior.smartAlarmEnabled else { return }
             self.applySmartAlarm()
         }
+        // Strap battery alerts (#368): low-battery warning + full-charge note. The notifier self-gates
+        // on the user's setting and the OS authorization, and carries its own persisted once-per-
+        // crossing state, so feeding it every battery reading is safe.
+        live.onBatteryUpdate = { [weak self] pct in
+            guard let self else { return }
+            BatteryNotifier.onBatteryUpdate(pct: Int(pct.rounded()),
+                                            charging: self.live.charging,
+                                            enabled: self.behavior.batteryAlerts)
+        }
         // HR-zone haptic coaching watches the smoothed bpm.
         $bpm.sink { [weak self] hr in self?.coachZone(hr) }.store(in: &hrCancellables)
         // Illness/strain early-warning recomputes when the daily history changes.

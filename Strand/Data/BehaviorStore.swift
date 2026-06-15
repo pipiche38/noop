@@ -31,6 +31,10 @@ final class BehaviorStore: ObservableObject {
     // MARK: Illness early-warning
     @Published var illnessWatch: Bool { didSet { d.set(illnessWatch, forKey: K.illness) } }
 
+    // MARK: Strap battery alerts
+    /// Notify on low strap battery (≤15%) and full charge (100%). Default ON (#368).
+    @Published var batteryAlerts: Bool { didSet { d.set(batteryAlerts, forKey: K.batteryAlerts) } }
+
     private let d = UserDefaults.standard
     private enum K {
         static let dtAction = "behavior.doubleTapAction"
@@ -46,6 +50,7 @@ final class BehaviorStore: ObservableObject {
         // watcher ever shipped). The defaults key is left orphaned on purpose — harmless, and
         // preserved should a real light-sleep watcher ever land.
         static let illness = "behavior.illnessWatch"
+        static let batteryAlerts = "behavior.batteryAlerts"
     }
 
     init() {
@@ -59,5 +64,6 @@ final class BehaviorStore: ObservableObject {
         smartAlarmEnabled = d.object(forKey: K.alarmOn) as? Bool ?? false
         smartAlarmMinutes = d.object(forKey: K.alarmTime) as? Int ?? 7 * 60       // 07:00
         illnessWatch = d.object(forKey: K.illness) as? Bool ?? false
+        batteryAlerts = d.object(forKey: K.batteryAlerts) as? Bool ?? true
     }
 }

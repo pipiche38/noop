@@ -17,6 +17,12 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 3.3.0 — Strap battery alerts
+
+- **New — strap battery alerts (all platforms):** get a system notification when your WHOOP's battery runs **low (≤15%)** or finishes **charging (100%)**, so you don't get caught out before bed. A shared `BatteryAlertPolicy` fires each alert **at most once per crossing** with a re-arm hysteresis band (low re-arms only above 25% or while charging; full re-arms only after it drops below 100%), and the once-per-crossing flags are **persisted**, so a battery hovering near 15% won't nag and the gate survives an app restart. On by default; toggle under **Settings → Automations**. Reimplemented from @ujix's starting point with the jitter/restart fixes (#368).
+
+---
+
 ## 3.2.0 — Under-the-hood: current-API migration (no behaviour change)
 
 A maintenance release with no user-facing behaviour change.

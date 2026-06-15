@@ -24,6 +24,7 @@ import com.noop.alarm.SmartAlarmStore
 import com.noop.analytics.IllnessWatch
 import com.noop.location.GpsSession
 import com.noop.location.LocationTracker
+import com.noop.notif.BatteryAlertNotifier
 import com.noop.notif.IllnessAlertNotifier
 import com.noop.ui.NoopPrefs
 import com.noop.ui.appLaunchIntent
@@ -195,6 +196,13 @@ class WhoopConnectionService : Service() {
                     IllnessAlertNotifier.onEvaluated(this@WhoopConnectionService, illness)
                 }
                 lastIllnessAlert = illness
+                // Battery alerts — low (≤15%) and charge-complete (100%). The once-per-crossing
+                // dedupe is persisted in NoopPrefs (BatteryAlertPolicy), so no in-memory pct tracking.
+                BatteryAlertNotifier.onBatteryUpdate(
+                    this@WhoopConnectionService,
+                    currPct = state.batteryPct?.roundToInt(),
+                    charging = state.charging,
+                )
                 // Feed the home-screen widget from the same stream — this service is its heartbeat
                 // while the app UI is closed. Throttled + no-op without a placed widget (the store
                 // checks both); runCatching so a Glance hiccup never tears down the connection.

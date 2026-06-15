@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.BatteryStd
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.TouchApp
@@ -52,6 +53,8 @@ fun AutomationsScreen(viewModel: AppViewModel) {
     val alarmMinutes by viewModel.smartAlarmMinutes.collectAsStateWithLifecycle()
     // Illness watch is real + persisted (opt-OUT — the watch has always run on Android).
     val illnessWatch by viewModel.illnessWatchEnabled.collectAsStateWithLifecycle()
+    // Battery alerts are real + persisted (opt-OUT, default ON; #368, thanks @ujix).
+    val batteryAlerts by viewModel.batteryAlertsEnabled.collectAsStateWithLifecycle()
     // The firmware alarm is EXPERIMENTAL: on a WHOOP 5/MG it is ONLY armed when the Experimental
     // probes toggle is on — otherwise enabling the alarm silently arms nothing (#111). Read the flag
     // so the UI can say so instead of promising a wake that never fires.
@@ -196,6 +199,21 @@ fun AutomationsScreen(viewModel: AppViewModel) {
                 help = "Needs at least 14 days of history. When two or more signals drift together you get a banner on Today and a notification — at most once a day.",
                 checked = illnessWatch,
                 onChange = { viewModel.setIllnessWatchEnabled(it) },
+            )
+        }
+
+        // Battery alerts (real + persisted; opt-OUT, default ON — #368, thanks @ujix).
+        SettingsSection(
+            icon = Icons.Filled.BatteryStd,
+            title = "Battery alerts",
+            blurb = "A heads-up when the strap battery gets low so you can recharge before bed, and a note when it's finished charging.",
+            active = batteryAlerts,
+        ) {
+            ToggleRow(
+                label = "Notify on low and full battery",
+                help = "Sends a notification when the strap drops to 15% or reaches a full charge — at most once per charge cycle.",
+                checked = batteryAlerts,
+                onChange = { viewModel.setBatteryAlertsEnabled(it) },
             )
         }
     }
