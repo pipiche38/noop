@@ -354,6 +354,11 @@ private struct TestModeRow: View {
             Text(mode.blurb)
                 .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+            // Live readout (Group E/F): the per-mode panel binding the registry's liveReadout ids. Shown
+            // only while the mode is on, so an inactive row stays compact.
+            if on, mode.domain == .sleep {
+                SleepReadoutPanel(live: live)
+            }
             HStack {
                 Spacer()
                 Button("Report") { report.start(mode: mode, live: live) }
@@ -362,6 +367,43 @@ private struct TestModeRow: View {
             }
         }
         .onAppear { on = TestCentre.active(mode.domain) }
+    }
+}
+
+/// The Sleep & Rest live-readout panel (Group E): HR density, gravity coverage, and the gate that
+/// fired tonight, bound from the pure `SleepReadout` source over LiveState's live buffers + tagged log
+/// tail. No hardcoded colours; uses the same tokens as the surrounding Test Centre rows.
+private struct SleepReadoutPanel: View {
+    @ObservedObject var live: LiveState
+
+    var body: some View {
+        let hrDensity = SleepReadout.hrDensityPerMinute(hr: live.recentHrSamples)
+        let gravCoverage = SleepReadout.gravityCoverageFraction(gravity: live.recentGravitySamples, hr: live.recentHrSamples)
+        let lastGate = SleepReadout.lastGateFired(taggedTail: live.taggedTail(domain: .sleep))
+        VStack(alignment: .leading, spacing: 4) {
+            ReadoutRow(label: "HR density (per min)",
+                       value: live.recentHrSamples.isEmpty ? "no live HR yet" : String(format: "%.1f", hrDensity))
+            ReadoutRow(label: "Gravity coverage",
+                       value: live.recentGravitySamples.isEmpty ? "no live gravity yet" : String(format: "%.0f%%", gravCoverage * 100))
+            ReadoutRow(label: "Last gate fired", value: lastGate ?? "no night yet")
+        }
+        .padding(.top, 2)
+    }
+}
+
+/// A compact key/value readout row for the Test Centre live panels (Group E/F). Mono value so the
+/// counts line up; secondary/tertiary tokens so it reads as a diagnostic, not a headline.
+private struct ReadoutRow: View {
+    let label: String
+    let value: String
+    var body: some View {
+        HStack {
+            Text(label).font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+            Spacer()
+            Text(value).font(StrandFont.mono).foregroundStyle(StrandPalette.textSecondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(value)")
     }
 }
 

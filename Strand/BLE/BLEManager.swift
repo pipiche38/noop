@@ -2084,6 +2084,9 @@ public final class BLEManager: NSObject, ObservableObject {
             let from = nowSec - BLEManager.inactivityLookbackSeconds
             let gravity = await collector?.recentGravity(from: from, to: nowSec) ?? []
             guard !gravity.isEmpty else { return }
+            // Sleep & Rest test mode (Group E): bank the live gravity window for the readout's coverage
+            // figure. Gated on the zero-cost active() Bool, so this is a no-op when the mode is off.
+            if TestCentre.active(.sleep) { state.recordSleepLiveGravity(gravity) }
 
             let decision = SedentaryDetector.evaluate(
                 gravity, state: InactivityPrefs.loadState(),

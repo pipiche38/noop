@@ -42,6 +42,11 @@ public final class FrameRouter {
             // byte across many frames, so an unguarded write re-renders the whole console for nothing.
             if let hr = parsed.parsed["heart_rate"]?.intValue, hr >= 30, hr <= 220, state.heartRate != hr {
                 state.heartRate = hr
+                // Sleep & Rest test mode (Group E): bank the live HR sample for the readout's HR-density
+                // figure. Gated on the zero-cost active() Bool, so this is a no-op when the mode is off.
+                if TestCentre.active(.sleep) {
+                    state.recordSleepLiveHr(ts: Int(Date().timeIntervalSince1970), bpm: hr)
+                }
             }
             // The realtime stream usually reports rr_count=0; only update R-R when this frame
             // actually carries intervals, so we don't wipe R-R sourced from the 0x2A37 profile.

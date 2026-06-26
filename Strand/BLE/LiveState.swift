@@ -56,6 +56,38 @@ public final class LiveState: ObservableObject {
     /// already spans a couple of days, plenty to fit a discharge slope against.
     static let maxBatterySamples = 400
 
+    // MARK: - Sleep & Rest test-mode live readout (Group E)
+
+    /// Rolling buffer of recent live HR samples, banked ONLY while the Sleep test mode is active so the
+    /// Test Centre readout can show live HR density (samples/min) the detector sees. Appended via
+    /// `recordSleepLiveSample` from the central live-HR ingest; empty (no work, no allocation) when the
+    /// mode is off. Capped + bounded; cleared on disconnect with the rest of the live biometrics.
+    @Published public private(set) var recentHrSamples: [HRSample] = []
+    /// Rolling buffer of recent live gravity samples, banked ONLY while the Sleep test mode is active so
+    /// the readout can show live gravity coverage. The twin of `recentHrSamples`.
+    @Published public private(set) var recentGravitySamples: [GravitySample] = []
+    /// Cap on each live-readout buffer. ~30 min of 1 Hz live HR is plenty to read a density/coverage
+    /// snapshot; bounded so an active test mode can never grow it without limit.
+    static let maxSleepReadoutSamples = 2000
+
+    /// Bank one live HR sample for the Sleep readout. Side-effect-only; the caller already gated on
+    /// `TestCentre.active(.sleep)`, so this does NO work when the mode is off (it is simply not called).
+    public func recordSleepLiveHr(ts: Int, bpm: Int) {
+        recentHrSamples.append(HRSample(ts: ts, bpm: bpm))
+        if recentHrSamples.count > Self.maxSleepReadoutSamples {
+            recentHrSamples.removeFirst(recentHrSamples.count - Self.maxSleepReadoutSamples)
+        }
+    }
+
+    /// Bank live gravity samples for the Sleep readout. Caller-gated on `TestCentre.active(.sleep)`.
+    public func recordSleepLiveGravity(_ samples: [GravitySample]) {
+        guard !samples.isEmpty else { return }
+        recentGravitySamples.append(contentsOf: samples)
+        if recentGravitySamples.count > Self.maxSleepReadoutSamples {
+            recentGravitySamples.removeFirst(recentGravitySamples.count - Self.maxSleepReadoutSamples)
+        }
+    }
+
     /// The strap's typical full-charge life in hours, chosen by generation, used as the cold-start
     /// fallback before enough of the user's own discharge is banked. The today lane / coordinator sets
     /// this from the connected `WhoopModel` (WHOOP 4.0 vs 5.0/MG); it defaults to the WHOOP 4.0 figure so
@@ -291,6 +323,8 @@ public final class LiveState: ObservableObject {
         rr.removeAll()
         rrRecent.removeAll()
         clearBatterySamples()   // a stale runtime estimate must not outlive the link either (#713)
+        recentHrSamples.removeAll()       // Sleep readout buffers must not outlive the link (Group E)
+        recentGravitySamples.removeAll()
     }
 
     /// Cap on the in-app strap-log ring buffer. Raised from the old ~1h (200 lines) to retain a rolling
@@ -308,6 +342,14 @@ public final class LiveState: ObservableObject {
         log.append(Self.redactPii(tagged))
         if log.count > Self.maxLogLines { log.removeFirst(log.count - Self.maxLogLines) }
         Self.persistTail(log)
+    }
+
+    /// The in-app log lines tagged for one test domain (for the Test Centre live readout). Read-only,
+    /// no side effects; the prefix is the same one `append(log:domain:)` writes, and redaction never
+    /// strips it (the tag is prepended before the scrub, which only touches identifiers). (Group E)
+    public func taggedTail(domain: TestDomain) -> [String] {
+        let prefix = "[\(domain.id)] "
+        return log.filter { $0.hasPrefix(prefix) }
     }
 
     // MARK: - Durable log tail (#510, scheduled debug export)
