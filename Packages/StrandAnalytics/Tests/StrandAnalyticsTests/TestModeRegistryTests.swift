@@ -58,3 +58,26 @@ final class TestModeRegistryTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Group E (Sleep & Rest): pin the questionnaire kinds + live-readout ids against drift.
+// The ids are meta.json keys and the readout ids the panel binds; a later edit that renames or drops
+// one must fail here. The id ORDER is already covered by TestModeRegistryTests.testSleepQuestionnaireKeys.
+
+final class TestModeRegistrySleepTests: XCTestCase {
+    func testSleepQuestionnaireIdsAndKinds() {
+        let sleep = TestModeRegistry.mode(.sleep)!
+        XCTAssertEqual(sleep.questionnaire.map(\.id),
+                       ["sleepTimes", "awakeStill", "naps", "shiftWork", "chargeTiming", "healthSleep"])
+        XCTAssertEqual(sleep.questionnaire.first { $0.id == "shiftWork" }?.kind, .yesNo)
+        XCTAssertEqual(sleep.questionnaire.first { $0.id == "healthSleep" }?.kind, .yesNo)
+        XCTAssertEqual(sleep.questionnaire.first { $0.id == "sleepTimes" }?.kind, .text)
+        XCTAssertEqual(sleep.questionnaire.first { $0.id == "naps" }?.kind, .text)
+        // No em-dash in any prompt (the writing-voice rule applies to user-facing strings too).
+        XCTAssertFalse(sleep.questionnaire.contains { $0.prompt.contains("\u{2014}") })
+    }
+
+    func testSleepLiveReadoutIds() {
+        let sleep = TestModeRegistry.mode(.sleep)!
+        XCTAssertEqual(sleep.liveReadout, ["hrDensityNow", "gravityCoverageNow", "lastNightGateFired"])
+    }
+}
