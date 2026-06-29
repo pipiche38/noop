@@ -37,7 +37,7 @@ struct AddDeviceWizard: View {
         case amazfit       // Amazfit / Zepp incl. Helio (Huami custom or standard HR)
         case miBand        // Xiaomi Mi Band (Huami; no-auth live HR path, honest message if auth needed)
         case garmin        // Garmin watch (standard Broadcast HR path + an enable hint)
-        case oura          // Oura ring (no open live stream → honest dead-end, points at file import)
+        case oura          // Oura Ring Gen 3/4/5 — live BLE sync via open_oura (AES-128/ECB, factory-reset pair)
         var id: Self { self }
 
         var isWhoop: Bool { self == .whoop4 || self == .whoop5mg }
@@ -86,15 +86,19 @@ struct AddDeviceWizard: View {
     /// Discovery-only EXPERIMENTAL Huami scanner (Amazfit / Zepp / Mi Band). `feedsLive: false`, never
     /// persists; the wizard only reads its `discovered` / `scanning`. Built once.
     @StateObject private var huamiScanner: HuamiHRSource
-    /// Discovery-only EXPERIMENTAL Oura probe. Detects the ring, then reports the honest dead-end. Built once.
-    @StateObject private var ouraScanner: OuraProbeSource
+    /// Discovery + pairing scanner for the Oura Ring wizard. `feedsLive: false` — wizard mode, no
+    /// LiveState writes. Device ID starts as a placeholder; the wizard sets it to the final
+    /// `"oura-{uuid}"` value just before `connect(_:)` is called.
+    @StateObject private var ouraScanner: OuraLiveSource
+    /// The ring the user tapped "Pair" on in the Oura scan list. Populated by `OuraWizardFlow`.
+    @State private var pickedOuraRing: OuraLiveSource.DiscoveredRing? = nil
 
     init(live: LiveState, onClose: @escaping () -> Void) {
         self.onClose = onClose
         // Route each throwaway scanner's diagnostics into the SAME exported strap log the active source
-        // path uses (issue #421 parity), so a tester's wizard scan — including the Oura probe's honest
-        // "no open live stream" dead-end — is captured in a shared debug bundle. The sources already
-        // self-prefix their lines ("HR-strap: " / "FTMS: " / "Huami: " / "Oura: "); we add the same
+        // path uses (issue #421 parity), so a tester's wizard scan — including the Oura pairing sequence
+        // — is captured in a shared debug bundle. The sources already self-prefix their lines
+        // ("HR-strap: " / "FTMS: " / "Huami: " / "Oura: "); we add the same
         // "[HH:mm:ss]" stamp AppModel's `straplog` uses so wizard lines read identically. Each source is
         // @MainActor and only calls this from the main actor, so the forward into @MainActor LiveState is
         // safe. Privacy-safe: statuses / service UUIDs / counts only, never a device address.
@@ -108,7 +112,9 @@ struct AddDeviceWizard: View {
         _ftmsScanner = StateObject(wrappedValue: FTMSSource(live: live, log: wizardLog, feedsLive: false))
         _huamiScanner = StateObject(wrappedValue: HuamiHRSource(
             live: live, deviceId: "scan-preview", log: wizardLog, feedsLive: false))
-        _ouraScanner = StateObject(wrappedValue: OuraProbeSource(log: wizardLog))
+        _ouraScanner = StateObject(wrappedValue: OuraLiveSource(
+            live: live, deviceId: "oura-wizard-scan",
+            log: wizardLog, feedsLive: false))
     }
 
     var body: some View {
@@ -369,9 +375,9 @@ struct AddDeviceWizard: View {
             return GarminBroadcast.broadcastHint
         case .oura:
             return [
-                "The Oura ring is proprietary and only syncs to the Oura app, so there's no open live stream NOOP can read.",
-                "We'll scan for your ring and check its Bluetooth services so you can see we looked.",
-                "Then we'll point you at file import, which is the honest way to get your Oura data into NOOP.",
+                "Open the Oura app and go to Settings → My Devices → your ring → Factory Reset. This removes the Oura app's pairing so NOOP can install its own auth key.",
+                "After the reset the ring LED will flash white. Keep the ring near your phone.",
+                "NOOP will scan for the ring, install its key, and start syncing HR, SpO2 and skin temperature. Your Oura account-export import still works — it uses separate data.",
             ]
         }
     }
@@ -429,10 +435,13 @@ struct AddDeviceWizard: View {
                     huamiScanner.scan()
                 }
             } else if type == .oura {
-                // EXPERIMENTAL Oura probe — detect the ring, then show the honest dead-end + file import.
-                OuraPickList(scanner: ouraScanner) {
-                    ouraScanner.stopScan()
-                    onClose()   // there's nothing to add; the user heads to file import
+                // EXPERIMENTAL Oura Ring pairing — factory-reset pair, key install, event drain.
+                OuraWizardFlow(scanner: ouraScanner) { ring in
+                    pickedOuraRing = ring
+                    nameDraft = ring.name
+                    finishAdd(makeActive: true)
+                } onRescan: {
+                    ouraScanner.scan()
                 }
             } else {
                 // Heart-rate strap AND Garmin (Broadcast HR is the standard 0x180D path).
@@ -453,6 +462,7 @@ struct AddDeviceWizard: View {
     /// switching device types never leaves a stale pick of another shape.
     private func clearOtherPicks(except keep: DeviceType) {
         if keep.isWhoop == false { pickedWhoop = nil }
+        if keep != .oura { pickedOuraRing = nil }
         switch keep {
         case .hrStrap, .garmin:    pickedHuami = nil; pickedMachine = nil
         case .gymEquipment:        pickedStrap = nil; pickedHuami = nil
@@ -509,6 +519,7 @@ struct AddDeviceWizard: View {
         if let pickedStrap { return pickedStrap.name }
         if let pickedMachine { return pickedMachine.name }
         if let pickedHuami { return pickedHuami.name }
+        if let pickedOuraRing { return pickedOuraRing.name }
         return type.map(typeTitle) ?? "Device"
     }
     private var confirmBrand: String {
@@ -617,6 +628,19 @@ struct AddDeviceWizard: View {
                 peripheralId: pickedMachine.id.uuidString,
                 sourceKind: .ftms,
                 capabilities: [.hr],
+                status: .paired,
+                addedAt: now, lastSeenAt: now)
+        } else if let pickedOuraRing {
+            // Oura Ring Gen 3/4/5 — live BLE sync via open_oura (factory-reset pair).
+            // The wizard's scanner already installed the auth key under "oura-{uuid}" in Keychain.
+            device = PairedDevice(
+                id: "oura-\(pickedOuraRing.id.uuidString)",
+                brand: "Oura",
+                model: pickedOuraRing.name,
+                nickname: name == pickedOuraRing.name ? nil : name,
+                peripheralId: pickedOuraRing.id.uuidString,
+                sourceKind: .oura,
+                capabilities: [.hr, .spo2, .skinTemp],
                 status: .paired,
                 addedAt: now, lastSeenAt: now)
         } else {
@@ -845,47 +869,93 @@ private struct HuamiPickList: View {
     }
 }
 
-// MARK: - Oura experimental probe list (honest dead-end → file import)
+// MARK: - Oura Ring pairing wizard flow (factory-reset pair + key install)
 
-private struct OuraPickList: View {
-    @ObservedObject var scanner: OuraProbeSource
-    /// Tapped when the user accepts the dead-end and heads to file import (closes the wizard).
-    let onUseImport: () -> Void
+private struct OuraWizardFlow: View {
+    @ObservedObject var scanner: OuraLiveSource
+    /// Called with the paired ring once `pairingSucceeded` fires. The parent registers the device
+    /// and closes the wizard.
+    let onPaired: (OuraLiveSource.DiscoveredRing) -> Void
+    let onRescan: () -> Void
+
+    @State private var pairingRing: OuraLiveSource.DiscoveredRing? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            ScanStatusBar(searching: scanner.scanning, onRescan: { scanner.scan() })
-            // Once we have a dead-end message (probed a ring, or couldn't), show it honestly.
-            if let msg = scanner.deadEndMessage {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "info.circle")
-                            .foregroundStyle(StrandPalette.statusWarning)
-                            .accessibilityHidden(true)
-                        Text(msg)
-                            .font(StrandFont.body)
-                            .foregroundStyle(StrandPalette.textPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
+            if let ring = pairingRing {
+                // Pairing phase — connect is in progress or failed.
+                if let error = scanner.authError {
+                    ouraErrorCard(error) {
+                        pairingRing = nil
+                        onRescan()
                     }
-                    Button("Use file import") { onUseImport() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(StrandPalette.accent)
-                        .accessibilityLabel("Use file import for Oura")
+                } else {
+                    ouraPairingCard(ring)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frostedCardSurface(cornerRadius: 14)
-            } else if scanner.discovered.isEmpty {
-                SearchingCard()
             } else {
-                // Found a ring (or rings): let the user pick one to probe so they see we genuinely looked.
-                ForEach(scanner.discovered.sorted { $0.rssi > $1.rssi }) { ring in
-                    DiscoveredRow(name: ring.name, subtitle: "Tap to check", rssi: ring.rssi) {
-                        scanner.probe(ring.id)
+                // Scanning phase — show discovered rings.
+                ScanStatusBar(searching: scanner.scanning, onRescan: onRescan)
+                if scanner.discovered.isEmpty {
+                    SearchingCard()
+                } else {
+                    ForEach(scanner.discovered.sorted { $0.rssi > $1.rssi }) { ring in
+                        DiscoveredRow(name: ring.name, subtitle: "Tap to pair", rssi: ring.rssi) {
+                            scanner.stopScan()
+                            scanner.setDeviceId("oura-\(ring.id.uuidString)")
+                            pairingRing = ring
+                            scanner.connect(ring.id)
+                        }
                     }
                 }
             }
         }
+        .onChange(of: scanner.pairingSucceeded) { _, succeeded in
+            if succeeded, let ring = pairingRing {
+                onPaired(ring)
+            }
+        }
+    }
+
+    private func ouraPairingCard(_ ring: OuraLiveSource.DiscoveredRing) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                ProgressView().tint(StrandPalette.accent)
+                Text("Pairing with \(ring.name)…")
+                    .font(StrandFont.body)
+                    .foregroundStyle(StrandPalette.textPrimary)
+            }
+            Text("Installing auth key on the ring. This takes a few seconds.")
+                .font(StrandFont.subhead)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .frostedCardSurface(cornerRadius: 14)
+    }
+
+    private func ouraErrorCard(_ message: String, onRetry: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(StrandPalette.statusWarning)
+                    .accessibilityHidden(true)
+                Text(message)
+                    .font(StrandFont.body)
+                    .foregroundStyle(StrandPalette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("If the ring was not factory-reset, open the Oura app → Settings → My Devices → Factory Reset, then try again.")
+                .font(StrandFont.subhead)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Rescan") { onRetry() }
+                .buttonStyle(.borderedProminent)
+                .tint(StrandPalette.accent)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frostedCardSurface(cornerRadius: 14)
     }
 }
 

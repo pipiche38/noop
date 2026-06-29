@@ -21,6 +21,7 @@ enum NavItem: String, CaseIterable, Identifiable, Hashable {
     case rhythm = "Rhythm"
     case appleHealth = "Apple Health"
     case xiaomi = "Mi Band"
+    case oura = "Oura Ring"
     case dataSources = "Data Sources"
     case backupSync = "Backup & Sync"
     case fusedRecord = "Your Data, Fused"
@@ -57,6 +58,7 @@ enum NavItem: String, CaseIterable, Identifiable, Hashable {
         case .rhythm: return "Rhythm"
         case .appleHealth: return "Apple Health"
         case .xiaomi: return "Mi Band"
+        case .oura: return "Oura Ring"
         case .dataSources: return "Data Sources"
         case .backupSync: return "Backup & Sync"
         case .fusedRecord: return "Your Data, Fused"
@@ -94,6 +96,7 @@ enum NavItem: String, CaseIterable, Identifiable, Hashable {
         case .rhythm: return "waveform.path"
         case .appleHealth: return "heart.fill"
         case .xiaomi: return "figure.walk.motion"
+        case .oura: return "circle.circle"
         case .dataSources: return "square.and.arrow.down.fill"
         case .backupSync: return "externaldrive.fill.badge.icloud"
         case .fusedRecord: return "square.stack.3d.up.fill"
@@ -136,7 +139,7 @@ struct NavGroup: Identifiable {
             .labBook, .rhythm, .trends,
         ]),
         NavGroup(title: "Data & App", id: "data_app", items: [
-            .devices, .dataSources, .appleHealth, .xiaomi, .backupSync, .fusedRecord,
+            .devices, .dataSources, .appleHealth, .xiaomi, .oura, .backupSync, .fusedRecord,
             .notifications, .automation, .smartAlarm, .settings, .support, .testCentre,
         ]),
     ]
@@ -312,6 +315,7 @@ struct RootView: View {
         case .rhythm: RhythmHost()
         case .appleHealth: AppleHealthView()
         case .xiaomi: XiaomiBandView()
+        case .oura: OuraRingView()
         case .dataSources: DataSourcesView()
         case .backupSync: BackupSyncView()
         case .fusedRecord: FusedRecordHost()

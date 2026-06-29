@@ -22,6 +22,10 @@ public enum DataSourceKind: String, Sendable, Codable, Equatable, CaseIterable {
     /// (sleep / resting HR / stress / steps). The FIT activity files inside the same ZIP are
     /// handled by the wave-1 FIT parser; this path does the WELLNESS daily + sleep only.
     case garminImport
+    /// Oura Ring Gen 3/4/5 — live BLE sync via the open_oura reverse-engineered protocol.
+    /// Drains HR/IBI, SpO2, and skin-temperature events from the ring over BLE; no cloud
+    /// account required. Distinct from `ouraImport` (the JSON account-export path).
+    case ouraBLE
 }
 
 // MARK: - Generic health sample (Apple Health Record sink)

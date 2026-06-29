@@ -53,6 +53,11 @@ public enum SourceKind: String, Sendable, CaseIterable {
     /// Apple Watch streamed via HealthKit (live HealthKit observer + background delivery). Apple-only,
     /// no Android twin. Additive: only the Apple Watch device registration writes it.
     case liveAppleWatch
+    /// Oura Ring Gen 3/4/5 — live BLE sync via the open_oura reverse-engineered protocol (AES-128/ECB
+    /// auth + TLV event drain). Reads HR/IBI, SpO2, and skin temperature in Phase 1; sleep hypnogram
+    /// and HRV to follow. Factory-reset pairing or user-supplied auth key (Phase B). EXPERIMENTAL:
+    /// shipped behind the experimental add-device tier; hardware-verified on a production ring.
+    case oura
 }
 
 /// Canonical metric a source can provide. Drives capability-aware UI + the day-owner resolver.

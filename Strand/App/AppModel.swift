@@ -796,6 +796,9 @@ final class AppModel: ObservableObject {
     /// End the WHOOP present-scan (idempotent). Call on leaving the wizard's pick step / on dismiss.
     func stopWhoopScan() { ble.stopWhoopScan() }
 
+    /// Trigger an immediate Oura Ring BLE sync if the ring is the active device. No-op otherwise.
+    func syncOura() { sourceCoordinator?.requestOuraSync() }
+
     /// Register a paired device and (optionally) make it the active one. The Add-a-device wizard's
     /// single write path: `add` upserts the row, and when `makeActive` is true `setActive` promotes it
     /// (the SourceCoordinator reacts to the active-device change and connects). No-op if the registry

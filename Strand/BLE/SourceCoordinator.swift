@@ -68,6 +68,9 @@ final class SourceCoordinator: ObservableObject {
     /// to a `.huami` device. Like the others it's a non-WHOOP live source sharing the same strap edge —
     /// exactly one of the non-WHOOP sources is ever live at a time.
     private var huamiSource: HuamiHRSource?
+    /// The lazily-created EXPERIMENTAL Oura Ring source. nil until the first switch to an `.oura` device.
+    /// Exposed publicly (read-only) so the Oura Ring data-source view can observe sync state.
+    private(set) var ouraSource: OuraLiveSource?
     /// The deviceId the active non-WHOOP source (`standardSource` / `ftmsSource` / `huamiSource`) runs for.
     private var activeStrapId: String?
     /// True once we've transitioned onto a generic strap. While false (the default / WHOOP-active
@@ -248,6 +251,7 @@ final class SourceCoordinator: ObservableObject {
         switch sourceKind(for: id) {
         case .ftms:  startFTMSSource(id: id)
         case .huami: startHuamiSource(id: id)
+        case .oura:  startOuraSource(id: id)
         default:     startStandardSource(id: id)
         }
         activeStrapId = id
@@ -314,12 +318,48 @@ final class SourceCoordinator: ObservableObject {
         huamiSource = source
     }
 
-    /// Stop whichever non-WHOOP source (standard strap, FTMS machine, or Huami device) is live, and drop
-    /// the reference. Idempotent. Exactly one is ever live, but we stop all defensively.
+    /// Start the EXPERIMENTAL Oura Ring source for `id`. HR (from IBI events) rides the SAME `LiveState`
+    /// channel as the other sources. Decoded events are flushed to WhoopStore via `OuraBLEImporter`.
+    private func startOuraSource(id: String) {
+        let source = OuraLiveSource(
+            live: live,
+            deviceId: id,
+            log: straplog,
+            onSyncComplete: { [storeHandle] events, syncedAt in
+                Task {
+                    if let store = await storeHandle() {
+                        try? await OuraBLEImporter.flush(events: events, syncedAt: syncedAt,
+                                                         into: store, deviceId: id)
+                    }
+                }
+            })
+        if let pid = peripheralId(for: id), let uuid = UUID(uuidString: pid) {
+            source.connect(uuid)
+        } else {
+            source.scan()
+        }
+        ouraSource = source
+    }
+
+    /// Trigger a fresh Oura sync cycle if an Oura source is live. If the source is already
+    /// mid-drain this is a no-op — the coordinator doesn't double-drain. Called from the Oura
+    /// Ring data-source view's "Sync now" button.
+    func requestOuraSync() {
+        guard let src = ouraSource else { return }
+        if let pid = peripheralId(for: src.deviceId), let uuid = UUID(uuidString: pid) {
+            src.connect(uuid)
+        } else {
+            src.scan()
+        }
+    }
+
+    /// Stop whichever non-WHOOP source (standard strap, FTMS machine, Huami device, or Oura ring) is live,
+    /// and drop the reference. Idempotent. Exactly one is ever live, but we stop all defensively.
     private func tearDownNonWhoopSource() {
         standardSource?.stop(); standardSource = nil
         ftmsSource?.stop(); ftmsSource = nil
         huamiSource?.stop(); huamiSource = nil
+        ouraSource?.stop(); ouraSource = nil
     }
 
     // MARK: - Identity adoption

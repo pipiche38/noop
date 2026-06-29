@@ -348,6 +348,7 @@ private struct DeviceCard: View {
         if device.sourceKind == .ftms { return "figure.run.treadmill" }
         if device.sourceKind == .huami { return "waveform.path.ecg.rectangle" }
         if device.sourceKind == .liveAppleWatch { return "applewatch" }
+        if device.sourceKind == .oura { return "circle.circle" }
         return SourceCoordinator.isWhoop(device) ? "applewatch.side.right" : "heart.circle"
     }
 
@@ -414,6 +415,14 @@ struct DeviceCapabilityProfile {
                 captures: "Speed · Cadence · Power · Distance · Energy · Heart rate (if the machine sends it)",
                 powers: "Records a live machine workout — Effort-scored from HR when the machine reports it",
                 footnote: "Live machine data over Bluetooth FTMS. No sleep, recovery, skin temp or SpO₂. Effort needs the machine's heart rate; without it the session logs the machine metrics only.")
+        }
+        // Oura Ring (live BLE sync via open_oura). HR/IBI + SpO2 + skin temp; no live console.
+        if d.sourceKind == .oura {
+            return DeviceCapabilityProfile(
+                displayModel: "Oura Ring (experimental)",
+                captures: "Resting HR · SpO₂ · Skin temperature",
+                powers: "Adds daily resting HR, SpO₂ and skin temp to History — no live console or Effort",
+                footnote: "Experimental: BLE sync via the open_oura reverse-engineered protocol. Requires a factory-reset pair so NOOP can install its own auth key. No sleep, HRV or steps in Phase 1.")
         }
         // EXPERIMENTAL Huami device (Amazfit / Zepp / Mi Band): best-effort live HR only, honest about it.
         if d.sourceKind == .huami {

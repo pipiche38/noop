@@ -40,6 +40,8 @@ packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     exactVersion: 2.4.1
+  OuraProtocol:
+    path: Packages/OuraProtocol
   WhoopProtocol:
     path: Packages/WhoopProtocol
   WhoopStore:
@@ -111,6 +113,7 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         COMBINE_HIDPI_IMAGES: YES
     dependencies:
+      - package: OuraProtocol
       - package: WhoopProtocol
       - package: WhoopStore
       - package: StrandAnalytics
@@ -252,6 +255,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_EMIT_LOC_STRINGS: YES
     dependencies:
+      - package: OuraProtocol
       - package: WhoopProtocol
       - package: WhoopStore
       - package: StrandAnalytics

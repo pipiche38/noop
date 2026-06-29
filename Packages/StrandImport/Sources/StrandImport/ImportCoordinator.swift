@@ -122,6 +122,9 @@ public struct ImportCoordinator {
         // importer owns brand detection. Unreachable but kept exhaustive.
         case .ouraImport, .fitbitImport, .garminImport:
             return .wearable(try wearable.import(from: url))
+        // ouraBLE is a BLE live-sync source — it never enters via file import.
+        case .ouraBLE:
+            throw ImportError.emptyExport("ouraBLE is a live-sync source, not a file import")
         }
     }
 
