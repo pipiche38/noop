@@ -762,6 +762,10 @@ final class AppModel: ObservableObject {
     /// picked (persisted under "selectedWhoopModel"), so every scan entry point ,
     /// Live, onboarding, the menu bar, Settings , honours the same choice.
     func scan(model: WhoopModel? = nil) {
+        // A non-WHOOP device (Oura ring / generic strap / FTMS / Huami) is the active device: force ITS
+        // reconnect instead of a fruitless WHOOP scan (#- "Scan & connect" used to always poke WHOOP only,
+        // even with e.g. a dropped Oura ring as the active device).
+        if sourceCoordinator?.reconnectActiveStrap() == true { return }
         let chosen = model
             ?? UserDefaults.standard.string(forKey: "selectedWhoopModel").flatMap(WhoopModel.init(rawValue:))
             ?? .whoop4

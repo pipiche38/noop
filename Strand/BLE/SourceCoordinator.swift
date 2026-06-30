@@ -363,6 +363,29 @@ final class SourceCoordinator: ObservableObject {
         ouraSource = source
     }
 
+    /// Force an immediate reconnect of whichever non-WHOOP source is active right now — the manual retry
+    /// behind the "Scan & connect" button (#- it previously only ever poked WHOOP, even with e.g. an Oura
+    /// ring as the active device, leaving a dropped strap with no way to force a retry short of waiting
+    /// out its own backoff). Bypasses any backoff wait already in flight. Returns false (a no-op) when
+    /// WHOOP is the active device, so the caller falls back to the WHOOP scan.
+    @discardableResult
+    func reconnectActiveStrap() -> Bool {
+        guard onStrap, let id = activeStrapId else { return false }
+        let connect: (UUID) -> Void
+        let scan: () -> Void
+        if let s = standardSource { connect = s.connect; scan = s.scan }
+        else if let s = ftmsSource { connect = s.connect; scan = s.scan }
+        else if let s = huamiSource { connect = s.connect; scan = s.scan }
+        else if let s = ouraSource { connect = s.connect; scan = s.scan }
+        else { return false }
+        if let pid = peripheralId(for: id), let uuid = UUID(uuidString: pid) {
+            connect(uuid)
+        } else {
+            scan()
+        }
+        return true
+    }
+
     /// Grant explicit adopt consent for `deviceId` so the NEXT live Oura session for it (started when it
     /// becomes the active device) may run the dangerous key install (s3.2). Called by the wizard AFTER its
     /// irreversible-consent gate + "Take over this ring?" confirm, immediately before the ring is registered

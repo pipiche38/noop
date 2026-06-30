@@ -138,6 +138,14 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Peripherals retained by identifier so a chosen one survives until connection (exact
     /// StandardHRSource seenPeripherals/pendingConnectID/retrievePeripherals pattern).
     private var seenPeripherals: [UUID: CBPeripheral] = [:]
+    /// True only while a USER-initiated `stop()` is tearing the link down — guards the auto-reconnect
+    /// in `didDisconnectPeripheral`/`didFailToConnect` so a deliberate teardown (e.g. switching the
+    /// active device away from this ring) never relaunches a connect. Cleared at the top of `connect()`,
+    /// mirroring `BLEManager.intentionalDisconnect`.
+    private var intentionalDisconnect = false
+    /// Capped exponential backoff counter for `didFailToConnect` (mirrors `BLEManager`'s 3,6,12,24,48,60s
+    /// ramp), so a ring that's genuinely out of range doesn't get hammered. Reset on a successful connect.
+    private var failedConnectAttempts = 0
 
     // MARK: - Sample buffer
 
@@ -224,6 +232,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Connect to the chosen ring and start the auth -> enable -> stream flow. Mirrors the
     /// StandardHRSource cached-by-identifier-first, else scan-then-connect pattern.
     public func connect(_ id: UUID) {
+        intentionalDisconnect = false
         stopScan()
         needsPairing = nil
         let p = seenPeripherals[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first
@@ -248,6 +257,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
 
     /// Tear down: cancel the connection, stop scanning, flush, clear all transient state. Idempotent.
     public func stop() {
+        intentionalDisconnect = true
         stopScan()
         pendingConnectID = nil
         stopReengageTimer()
@@ -542,6 +552,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         log("Oura: connected - discovering services")
+        failedConnectAttempts = 0   // a successful connect clears the reconnect backoff
         peripheral.delegate = self
         // Fresh driver per connection so a new session re-runs auth (the app key is session-scoped). The
         // driver's `allowKeyInstall` is gated on this connection's adopt consent ONLY: with no consent the
@@ -562,6 +573,19 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
                                didFailToConnect peripheral: CBPeripheral, error: Error?) {
         log("Oura: WARNING failed to connect - \(error?.localizedDescription ?? "unknown error")")
         if feedsLive { live.connected = false; live.streamingLiveHR = false }
+        // A failed CB-level connect (e.g. a weak-signal handshake timeout at the edge of range) otherwise
+        // dead-ends here with no recovery until the user manually reconnects. Reschedule with a capped
+        // exponential backoff (3, 6, 12, 24, 48, 60s...) so a ring that's genuinely out of range doesn't
+        // get hammered. Mirrors BLEManager's WHOOP didFailToConnect handling.
+        guard !intentionalDisconnect else { return }
+        failedConnectAttempts += 1
+        let delay = min(60.0, 3.0 * pow(2.0, Double(failedConnectAttempts - 1)))
+        log("Oura: reconnecting in \(Int(delay))s (attempt \(failedConnectAttempts))")
+        let id = peripheral.identifier
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, !self.intentionalDisconnect else { return }
+            self.connect(id)
+        }
     }
 
     public func centralManager(_ central: CBCentralManager,
@@ -586,6 +610,20 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         flush()
         if feedsLive { live.connected = false; live.streamingLiveHR = false }
         if self.peripheral?.identifier == peripheral.identifier { self.peripheral = nil }
+        // An involuntary drop (ring went out of range, link timed out) otherwise dead-ends here with no
+        // recovery until the user manually reconnects (#- the ring just sits disconnected). Reschedule a
+        // flat 3s rescan, mirroring BLEManager's WHOOP disconnect handling. `needsPairing == nil` is the
+        // important guard: `announceNeedsPairing` sets it and itself cancels the connection, which fires
+        // this same callback — without the guard a ring with a bad/missing key would get hammered with
+        // reconnect attempts forever instead of staying in its honest needs-pairing state.
+        if !intentionalDisconnect, needsPairing == nil {
+            log("Oura: rescanning in 3s")
+            let id = peripheral.identifier
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self, !self.intentionalDisconnect else { return }
+                self.connect(id)
+            }
+        }
     }
 }
 
