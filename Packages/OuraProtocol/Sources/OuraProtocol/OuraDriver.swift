@@ -334,8 +334,9 @@ public final class OuraDriver {
         if frame.subop == 0x28 {
             return .liveHRPush(frame.subBody)
         }
-        // Enable/subscribe ACKs (0x23 / 0x27) advance the triplet (s5.6).
-        if frame.subop == 0x23 || frame.subop == 0x27 {
+        // Enable triplet ACKs advance the sequence (s5.6): 0x21 = feature-read resp (dhr_read ack),
+        // 0x23 = enable ack, 0x27 = subscribe ack.
+        if frame.subop == 0x21 || frame.subop == 0x23 || frame.subop == 0x27 {
             return .enableAck
         }
         return .unhandled

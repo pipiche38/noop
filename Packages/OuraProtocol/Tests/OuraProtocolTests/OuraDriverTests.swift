@@ -214,6 +214,10 @@ final class OuraDriverTests: XCTestCase {
         let statusFrame = OuraSecureFrame(subop: 0x2E, subBody: [0x00])
         XCTAssertEqual(d.handleSecureFrame(statusFrame), .authStatus(.success))
 
+        // Feature-read response (dhr_read ACK, s5.6 step 1 `2f 06 21 02 01 11 02 00`): must advance the triplet.
+        let readAckFrame = OuraSecureFrame(subop: 0x21, subBody: [0x02, 0x01, 0x11, 0x02, 0x00])
+        XCTAssertEqual(d.handleSecureFrame(readAckFrame), .enableAck)
+
         let ackFrame = OuraSecureFrame(subop: 0x23, subBody: [0x02, 0x00])
         XCTAssertEqual(d.handleSecureFrame(ackFrame), .enableAck)
 
