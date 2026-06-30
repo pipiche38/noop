@@ -53,7 +53,7 @@ struct OuraRingView: View {
     var body: some View {
         ScreenScaffold(
             title: "Oura Ring",
-            subtitle: subtitle,
+            subtitle: subtitle.map { "\($0)" },
             onRefresh: { await repo.refresh() },
             lazy: loaded && hasData
         ) {
@@ -177,7 +177,7 @@ struct OuraRingView: View {
         }
     }
 
-    private func syncCard(icon: String, tint: Color, pulsing: Bool, label: () -> String) -> some View {
+    private func syncCard(icon: String, tint: Color, pulsing: Bool, label: @escaping () -> String) -> some View {
         NoopCard(tint: tint) {
             HStack(spacing: 10) {
                 ConnectionDot(tone: .accent, pulsing: pulsing)

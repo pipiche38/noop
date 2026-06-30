@@ -909,8 +909,8 @@ private struct OuraWizardFlow: View {
                 }
             }
         }
-        .onChange(of: scanner.pairingSucceeded) { _, succeeded in
-            if succeeded, let ring = pairingRing {
+        .onChangeCompat(of: scanner.pairingSucceeded) { _ in
+            if scanner.pairingSucceeded, let ring = pairingRing {
                 onPaired(ring)
             }
         }
