@@ -264,7 +264,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         batteryPct = nil
         needsPairing = nil
         flush()                       // persist anything still buffered
-        if feedsLive { live.connected = false }
+        if feedsLive { live.connected = false; live.bonded = false }
     }
 
     // MARK: - Driver wiring
@@ -306,6 +306,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 reachedStreaming = true
                 adoptPhase = .streaming   // re-auth after an install (or a normal auth) reached the stream: adoption complete
                 pendingInstallKey = nil   // an OK ack already persisted the key; nothing left in flight
+                if feedsLive { live.bonded = true }   // auth + enableAck succeeded: Oura equivalent of a WHOOP bond
                 log("Oura: live-HR enabled - streaming HR / IBI")
                 startReengageTimer()
             }
@@ -481,7 +482,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         needsPairing = msg
         log("Oura: \(msg)")
         stopReengageTimer()
-        if feedsLive { live.connected = false }
+        if feedsLive { live.connected = false; live.bonded = false }
         if let p = peripheral { central.cancelPeripheralConnection(p) }
     }
 
@@ -506,7 +507,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
             }
         default:
             // Radio off / unauthorized / resetting -> the link is not live.
-            if feedsLive { live.connected = false }
+            if feedsLive { live.connected = false; live.bonded = false }
         }
     }
 
@@ -560,7 +561,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
     public func centralManager(_ central: CBCentralManager,
                                didFailToConnect peripheral: CBPeripheral, error: Error?) {
         log("Oura: WARNING failed to connect - \(error?.localizedDescription ?? "unknown error")")
-        if feedsLive { live.connected = false }
+        if feedsLive { live.connected = false; live.bonded = false }
     }
 
     public func centralManager(_ central: CBCentralManager,
@@ -583,7 +584,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         if adoptPhase == .installingKey { adoptPhase = .failed }
         batteryPct = nil
         flush()
-        if feedsLive { live.connected = false }
+        if feedsLive { live.connected = false; live.bonded = false }
         if self.peripheral?.identifier == peripheral.identifier { self.peripheral = nil }
     }
 }
