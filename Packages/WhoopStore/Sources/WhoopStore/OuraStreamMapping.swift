@@ -34,7 +34,8 @@ public enum OuraStreamMapping {
     /// Build a `Streams` from a batch of decoded Oura events, all stamped at the arrival wall-clock `ts`
     /// (unix seconds). Pure → unit-testable. Section-4 table:
     ///   - `.hr`         (0x55 live-HR push)            → `hr:[HRSample]`
-    ///   - `.ibi`        (0x44/0x60 IBI)                → `rr:[RRInterval]`
+    ///   - `.ibi`        (0x44/0x60 IBI)                → `rr:[RRInterval]`, AND derives `hr:[HRSample]`
+    ///                                                     when the batch has no native `.hr` (see below)
     ///   - `.hrv`        (0x5D HRV tag, raw int8 b1/b2)  → `events:[WhoopEvent(kind: OURA_HRV)]`
     ///   - `.spo2`       (0x6F/0x70/0x77)              → `spo2:[SpO2Sample(raw_adc)]`
     ///   - `.temp`       (0x46/0x75)                    → `skinTemp:[SkinTempSample(raw_adc)]`
@@ -42,18 +43,35 @@ public enum OuraStreamMapping {
     ///   - `.battery`                                   → `battery:[BatterySample]`
     /// Every other event case (`.motion`, `.state`, `.timeSync`, `.rtcBeacon`, `.debugText`, `.tierB`)
     /// is intentionally not folded into a durable stream here.
+    ///
+    /// DERIVED HR FROM R-R (backfill gap-fill): `.hr` (the native BPM push) only ever rides the LIVE
+    /// 0x2F stream (OURA_PROTOCOL.md s5.6) — it is NOT part of the buffered/historical GetEvents TLV
+    /// stream at all, unlike WHOOP's own historical packet (which carries a native `heart_rate` field
+    /// from the strap itself). So a backfilled batch from a disconnected stretch has real, dense R-R
+    /// intervals (`.ibi`) but NEVER a native `.hr` — without deriving one, every HR chart gap during a
+    /// disconnected period would be permanent regardless of how well the history fetch works. This is
+    /// the SAME derivation WHOOP's own firmware already validates internally
+    /// (`WhoopProtocol/Interpreter.swift`'s `decodeWhoop5Historical` doc comment: "60000/mean(R-R) ≈
+    /// heart_rate, 88%") and the SAME philosophy this file already applies to HRV (NOOP reconstructs its
+    /// own RMSSD from the IBI stream) — not a fabrication, a standard, exact physiological computation
+    /// from real decoded data. Gated to a plausible bpm range and skipped entirely when a native `.hr`
+    /// IS present in the batch, so a real push is never overwritten by a derived value.
     public static func streams(from events: [OuraEvent], at ts: Int) -> Streams {
         var out = Streams()
+        var hasNativeHR = false
+        var ibiMsValues: [Int] = []
         for e in events {
             switch e {
             case .hr(let v):
                 // Honest HR: surface only the ring's decoded BPM. The push also carries one IBI, but the
                 // dedicated `.ibi` events are the R-R source, so we do not synthesise an RR row from the HR
                 // push here to avoid double-counting the same interval.
+                hasNativeHR = true
                 out.hr.append(HRSample(ts: ts, bpm: v.bpm))
 
             case .ibi(let v):
                 out.rr.append(RRInterval(ts: ts, rrMs: v.ibiMs))
+                ibiMsValues.append(v.ibiMs)
 
             case .hrv(let v):
                 // The ring's own 0x5D tag, carried RAW for diagnostics/parity. The two int8 fields
@@ -103,6 +121,20 @@ public enum OuraStreamMapping {
                 // Not a durable per-device stream row (timeSync/rtcBeacon anchor the transport's clock;
                 // motion/state/debug are diagnostics; Tier-B is UNVERIFIED and must never feed scoring).
                 continue
+            }
+        }
+        // Derive one HR sample from this batch's R-R intervals when there's no native push to prefer
+        // (see the derivation note above `streams(from:at:)`). The MEDIAN R-R (not the mean) so one
+        // outlier interval can't skew the derived bpm, mirroring the same robustness choice already
+        // used for this batch's own representative ring-time (OuraLiveSource.medianRingTimestamp).
+        if !hasNativeHR, !ibiMsValues.isEmpty {
+            let sorted = ibiMsValues.sorted()
+            let medianRRMs = sorted[sorted.count / 2]
+            if medianRRMs > 0 {
+                let bpm = Int((60_000.0 / Double(medianRRMs)).rounded())
+                if bpm >= 30, bpm <= 220 {   // physiological gate, matches OuraLiveSource's live-HR gate
+                    out.hr.append(HRSample(ts: ts, bpm: bpm))
+                }
             }
         }
         return out

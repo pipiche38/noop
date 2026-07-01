@@ -19,7 +19,7 @@ final class OuraStreamMappingTests: XCTestCase {
         XCTAssertTrue(s.rr.isEmpty)
     }
 
-    // MARK: - IBI 0x44/0x60 -> rr:[RRInterval]
+    // MARK: - IBI 0x44/0x60 -> rr:[RRInterval] (+ derives hr:[HRSample] with no native push present)
 
     func testIBIMapsToRRStream() {
         let s = OuraStreamMapping.streams(from: [
@@ -28,6 +28,39 @@ final class OuraStreamMappingTests: XCTestCase {
         ], at: ts)
         XCTAssertEqual(s.rr.map { $0.rrMs }, [820, 815])
         XCTAssertEqual(s.rr.map { $0.ts }, [ts, ts])
+        // No native .hr in this batch -> one bpm sample derived from the median R-R (see below).
+        XCTAssertEqual(s.hr.count, 1)
+    }
+
+    // MARK: - Derived HR from R-R (backfill gap-fill; .hr never rides the historical stream)
+
+    func testIBIOnlyBatchDerivesHRFromMedianRR() {
+        // median([820, 815, 900]) = 820ms -> round(60000/820) = 73 bpm.
+        let s = OuraStreamMapping.streams(from: [
+            .ibi(OuraIBI(ringTimestamp: 100, ibiMs: 900)),
+            .ibi(OuraIBI(ringTimestamp: 100, ibiMs: 815)),
+            .ibi(OuraIBI(ringTimestamp: 100, ibiMs: 820)),
+        ], at: ts)
+        XCTAssertEqual(s.hr.count, 1)
+        XCTAssertEqual(s.hr[0].bpm, 73)
+        XCTAssertEqual(s.hr[0].ts, ts)
+    }
+
+    func testNativeHRPresentSkipsDerivedHR() {
+        // A native push in the SAME batch wins outright; no derived bpm is added alongside it.
+        let s = OuraStreamMapping.streams(from: [
+            .hr(OuraHR(ringTimestamp: 100, bpm: 58, ibiMs: 1034)),
+            .ibi(OuraIBI(ringTimestamp: 100, ibiMs: 300)),   // would derive an implausible bpm if used
+        ], at: ts)
+        XCTAssertEqual(s.hr.count, 1)
+        XCTAssertEqual(s.hr[0].bpm, 58)
+    }
+
+    func testImplausibleDerivedBPMIsGatedOut() {
+        // 60000/30 = 2000 bpm -> physiologically impossible, must not be surfaced.
+        let s = OuraStreamMapping.streams(from: [
+            .ibi(OuraIBI(ringTimestamp: 100, ibiMs: 30)),
+        ], at: ts)
         XCTAssertTrue(s.hr.isEmpty)
     }
 
