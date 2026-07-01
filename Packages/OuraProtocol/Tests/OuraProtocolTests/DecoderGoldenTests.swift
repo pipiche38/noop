@@ -114,6 +114,14 @@ final class DecoderGoldenTests: XCTestCase {
         XCTAssertEqual(ts, OuraTimeSync(ringTimestamp: rt, epochMs: 1_719_662_400_000, tzOffsetSeconds: 3600))
     }
 
+    /// CRASH REGRESSION (real-device capture, 2026-07-01): a corrupted/garbage record whose epochSeconds
+    /// x1000 (seconds -> ms) conversion overflows Int64 must decode to nil, never trap. A raw `*` here
+    /// previously crashed the app outright (EXC_BREAKPOINT, arithmetic overflow in decodeTimeSync).
+    func testTimeSync0x42OverflowingEpochDecodesToNilInsteadOfCrashing() {
+        let rec = record("420d02000100ffffffffffffff7f02")   // epochSeconds = Int64.max bit pattern
+        XCTAssertNil(OuraDecoders.decodeTimeSync(rec))
+    }
+
     // MARK: - 0x4E sleep phase (2-bit codes MSB-first; header byte skipped)
 
     func testSleepPhase0x4E() {

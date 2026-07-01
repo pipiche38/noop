@@ -296,8 +296,14 @@ public enum OuraDecoders {
         var epochSeconds: UInt64 = 0
         for k in 0..<8 { epochSeconds |= UInt64(b[k]) << (8 * k) }
         let tz = Int(Int8(bitPattern: b[8])) * 1800
-        return OuraTimeSync(ringTimestamp: rec.ringTimestamp,
-                            epochMs: Int64(bitPattern: epochSeconds) * 1000, tzOffsetSeconds: tz)
+        // CRASH FIX (real-device capture, 2026-07-01): a corrupted/garbage record can carry an
+        // epochSeconds value whose x1000 (seconds -> ms) conversion overflows Int64 - the raw `*`
+        // operator traps on overflow, which crashed the app outright (arithmetic overflow at this exact
+        // multiply). Decode to nil instead (honest-data invariant: never guess, and never crash on a
+        // malformed record either) rather than trust an unrepresentable value.
+        let (epochMs, overflowed) = Int64(bitPattern: epochSeconds).multipliedReportingOverflow(by: 1000)
+        guard !overflowed else { return nil }
+        return OuraTimeSync(ringTimestamp: rec.ringTimestamp, epochMs: epochMs, tzOffsetSeconds: tz)
     }
 
     // MARK: - RTC beacon (0x85; s6.15)
