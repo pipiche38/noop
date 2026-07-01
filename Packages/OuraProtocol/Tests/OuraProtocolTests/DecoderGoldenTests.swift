@@ -107,8 +107,9 @@ final class DecoderGoldenTests: XCTestCase {
     // MARK: - 0x42 time sync (int64 LE epoch ms + tz int8 x1800)
 
     func testTimeSync0x42() {
-        // epoch 1719662400000 ms, tz byte 2 -> 3600 s.
-        let rec = record("420d0200010000d2dd639001000002")
+        // Wire value is epoch SECONDS (real-device capture, 2026-07-01 — see decodeTimeSync's doc
+        // comment): raw 1719662400 (seconds) decodes to epochMs 1719662400000 (x1000). tz byte 2 -> 3600 s.
+        let rec = record("420d0200010040f77f660000000002")
         let ts = OuraDecoders.decodeTimeSync(rec)
         XCTAssertEqual(ts, OuraTimeSync(ringTimestamp: rt, epochMs: 1_719_662_400_000, tzOffsetSeconds: 3600))
     }
@@ -219,5 +220,26 @@ final class DecoderGoldenTests: XCTestCase {
         XCTAssertNil(OuraDecoders.decodeTemp(oddTemp))
         // An empty HRV body -> nil.
         XCTAssertNil(OuraDecoders.decodeHRV(OuraRecord(type: 0x5D, ringTimestamp: rt, payload: [])))
+    }
+
+    // MARK: - 0x11 GetEvents response (outer frame body, not a TLV record; s5.2)
+
+    func testGetEventsResponseMoreDataDecodesStatusAndCursor() {
+        // status 0xFF (data follows), sub_status 0x01, last_ring_timestamp = 0x12345678 LE, pad 0000.
+        let body = bytes("ff01785634120000")
+        let resp = OuraDecoders.decodeGetEventsResponse(body)
+        XCTAssertEqual(resp, OuraGetEventsResponse(status: 0xFF, subStatus: 0x01, lastRingTimestamp: 0x12345678))
+        XCTAssertEqual(resp?.moreData, true)
+    }
+
+    func testGetEventsResponseNoMoreDataDecodesFalse() {
+        let body = bytes("0000785634120000")
+        let resp = OuraDecoders.decodeGetEventsResponse(body)
+        XCTAssertEqual(resp?.status, 0x00)
+        XCTAssertEqual(resp?.moreData, false)
+    }
+
+    func testGetEventsResponseShortBodyDecodesToNil() {
+        XCTAssertNil(OuraDecoders.decodeGetEventsResponse([0xFF, 0x01, 0x78, 0x56]))
     }
 }

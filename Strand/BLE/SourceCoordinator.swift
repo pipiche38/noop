@@ -353,7 +353,23 @@ final class SourceCoordinator: ObservableObject {
             },
             log: straplog,
             onBattery: { [live] pct in live.setBattery(Double(pct)) },
-            adoptIntent: adoptIntent)
+            adoptIntent: adoptIntent,
+            // Durable per-device history-fetch cursor (the ring's own `last_ring_timestamp`, already
+            // acknowledged), reusing the SAME generic name/value store WHOOP's backfill trim cursor uses
+            // (`Cursors.swift`) rather than a separate mechanism. Losing this (e.g. a fresh install) just
+            // means the next fetch starts from 0 (full dump) - safe, since `store.insert` upserts.
+            readCursor: { [storeHandle] completion in
+                Task {
+                    guard let store = await storeHandle() else { completion(nil); return }
+                    let value = try? await store.cursor("oura_history:\(id)")
+                    completion(value ?? nil)
+                }
+            },
+            writeCursor: { [storeHandle] value in
+                Task {
+                    if let store = await storeHandle() { try? await store.setCursor("oura_history:\(id)", value) }
+                }
+            })
         if adoptIntent { straplog("Oura: adopt consent granted - this session may install NOOP's key") }
         if let pid = peripheralId(for: id), let uuid = UUID(uuidString: pid) {
             source.connect(uuid)

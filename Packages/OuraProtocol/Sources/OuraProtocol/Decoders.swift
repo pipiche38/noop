@@ -279,17 +279,25 @@ public enum OuraDecoders {
 
     // MARK: - Time sync (0x42; s6.11)
 
-    /// Decode the 0x42 time-sync ind: bytes 6-13 = int64 LE epoch ms; byte14 = int8 tz offset in
+    /// Decode the 0x42 time-sync ind: bytes 6-13 = int64 LE epoch SECONDS; byte14 = int8 tz offset in
     /// 30-min units (x1800 = seconds). Per OURA_PROTOCOL.md s6.11. Returns nil on a short body.
+    ///
+    /// CORRECTED UNIT (real-device capture, 2026-07-01): OURA_PROTOCOL.md s6.11 (a reverse-engineered,
+    /// unverified-until-now claim) states this 8-byte field is epoch MILLISECONDS. A live Gen3 ring's
+    /// actual `0x42` event decoded to a value that, taken as milliseconds, placed the anchor at
+    /// 1970-01-21 — but that same raw value, multiplied by 1000, lands almost exactly on the real
+    /// current date. That is: the wire value IS epoch seconds, not milliseconds. `OuraTimeSync.epochMs`
+    /// keeps its documented (milliseconds) contract; this decoder converts at the source so every
+    /// consumer (the clock-anchor s5.5 conversion) keeps working from a real millisecond value.
     public static func decodeTimeSync(_ rec: OuraRecord) -> OuraTimeSync? {
         let b = rec.payload
-        // body[0..8] = epoch ms (8 bytes), body[8] = tz offset.
+        // body[0..8] = epoch SECONDS (8 bytes), body[8] = tz offset.
         guard b.count >= 9 else { return nil }
-        var epoch: UInt64 = 0
-        for k in 0..<8 { epoch |= UInt64(b[k]) << (8 * k) }
+        var epochSeconds: UInt64 = 0
+        for k in 0..<8 { epochSeconds |= UInt64(b[k]) << (8 * k) }
         let tz = Int(Int8(bitPattern: b[8])) * 1800
         return OuraTimeSync(ringTimestamp: rec.ringTimestamp,
-                            epochMs: Int64(bitPattern: epoch), tzOffsetSeconds: tz)
+                            epochMs: Int64(bitPattern: epochSeconds) * 1000, tzOffsetSeconds: tz)
     }
 
     // MARK: - RTC beacon (0x85; s6.15)
@@ -373,6 +381,20 @@ public enum OuraDecoders {
             }
         }
         return out.isEmpty ? nil : out
+    }
+
+    // MARK: - GetEvents response (0x11; s5.2)
+
+    /// Decode the `0x11` GetEvents-response OUTER FRAME body (NOT a TLV record - this rides the
+    /// command/command-response framing, s2.1): `<status:1> <sub_status:1> <last_ring_timestamp:4 LE>
+    /// <pad:2>`, 8 bytes total. `status == 0x00` means empty/no more; any other value means data
+    /// follows (the actual event records arrive as separate inner TLV notifications, s2.3) and
+    /// `lastRingTimestamp` is the cursor to use for the next fetch. Per OURA_PROTOCOL.md s5.2. Returns
+    /// nil on a short body (honest-data invariant: never guess a cursor).
+    public static func decodeGetEventsResponse(_ body: [UInt8]) -> OuraGetEventsResponse? {
+        guard body.count >= 8 else { return nil }
+        return OuraGetEventsResponse(status: body[0], subStatus: body[1],
+                                      lastRingTimestamp: UInt32(u32le(body, 2)))
     }
 }
 

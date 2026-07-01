@@ -180,4 +180,40 @@ public enum OuraEvent: Equatable, Sendable {
         if case .tierB = self { return true }
         return false
     }
+
+    /// The record's own ring-clock timestamp, so a transport can pick a representative ring-time for a
+    /// batch (e.g. to convert to UTC via a clock anchor, OURA_PROTOCOL.md s5.5) without re-deriving it
+    /// per case. nil only for `.battery`, which is a request/response snapshot with no TLV record of
+    /// its own (OuraBattery carries no ringTimestamp field).
+    public var ringTimestamp: UInt32? {
+        switch self {
+        case .hr(let v): return v.ringTimestamp
+        case .ibi(let v): return v.ringTimestamp
+        case .hrv(let v): return v.ringTimestamp
+        case .spo2(let v): return v.ringTimestamp
+        case .temp(let v): return v.ringTimestamp
+        case .battery: return nil
+        case .sleepPhase(let v): return v.ringTimestamp
+        case .motion(let v): return v.ringTimestamp
+        case .state(let v): return v.ringTimestamp
+        case .timeSync(let v): return v.ringTimestamp
+        case .rtcBeacon(let v): return v.ringTimestamp
+        case .debugText(let ringTimestamp, _): return ringTimestamp
+        case .tierB(let v): return v.ringTimestamp
+        }
+    }
+}
+
+/// The ring's response to a GetEvents request (`0x11`, OURA_PROTOCOL.md s5.2): `11 08 <status:1>
+/// <sub_status:1> <last_ring_timestamp:4 LE> <pad:2>`. `status == 0x00` means empty/no more;
+/// any other value means data follows and `lastRingTimestamp` is the cursor to use next.
+public struct OuraGetEventsResponse: Equatable, Sendable {
+    public let status: UInt8
+    public let subStatus: UInt8
+    public let lastRingTimestamp: UInt32
+    public init(status: UInt8, subStatus: UInt8, lastRingTimestamp: UInt32) {
+        self.status = status; self.subStatus = subStatus; self.lastRingTimestamp = lastRingTimestamp
+    }
+    /// `0x00` = empty/no more; anything else = data follows (event records arrive as inner TLV stream).
+    public var moreData: Bool { status != 0x00 }
 }

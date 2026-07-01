@@ -85,6 +85,9 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// The `0x25` SetAuthKey-response outer opcode (`25 01 <status>`, status `0x00` = OK). Per
     /// OURA_PROTOCOL.md s3.2. This is the install-ack the adopt key-install awaits.
     private static let setAuthKeyRespOp: UInt8 = 0x25
+    /// The `0x11` GetEvents-response outer opcode (`11 08 <status> <sub_status> <last_ring_timestamp:4 LE>
+    /// <pad:2>`). Per OURA_PROTOCOL.md s5.2. This is the ack a history-fetch round awaits.
+    private static let getEventsRespOp: UInt8 = 0x11
 
     // MARK: - Dependencies (injected - no BLEManager / WhoopBleClient reference)
 
@@ -93,6 +96,14 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private let persist: (Streams) -> Void
     private let log: (String) -> Void
     private let onBattery: (Int) -> Void
+    /// Reads the persisted per-device history-fetch cursor (nil if never fetched before). Called once
+    /// right after construction to seed `historyCursor`. Wired by `SourceCoordinator` to
+    /// `WhoopStore.cursor("oura_history:<deviceId>")`. Defaults to "never fetched" so tests/previews
+    /// that don't inject it behave like a fresh device.
+    private let readCursor: (@escaping (Int?) -> Void) -> Void
+    /// Persists the history-fetch cursor after each round advances it. Fire-and-forget, mirrors `persist`.
+    /// Wired by `SourceCoordinator` to `WhoopStore.setCursor("oura_history:<deviceId>", _:)`.
+    private let writeCursor: (Int) -> Void
     /// The ring generation (carried on `PairedDevice.model`, recovered via `OuraRingGen.from(model:)`).
     /// Selects the MTU clamp, which characteristics to discover, and the live-HR command set.
     private let ringGen: OuraRingGen
@@ -164,6 +175,58 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private var reengageTimer: Timer?
     private let reengageInterval: TimeInterval = 15
 
+    // MARK: - History fetch (backfill of data banked while disconnected)
+
+    /// Ring-time -> UTC anchor, set from a `0x42` time-sync event (primary, OURA_PROTOCOL.md s5.5) or -
+    /// only when no anchor exists yet - a `0x85` RTC beacon (secondary, coarser). nil until the first one
+    /// arrives after a fresh connect, during which buffered batches fall back to arrival wall-clock
+    /// (unchanged live behaviour).
+    private var clockAnchor: OuraClockAnchor?
+    /// The persisted per-device fetch cursor (the ring's own `last_ring_timestamp`, already
+    /// acknowledged). Seeded once from `readCursor` at construction; advanced + persisted via
+    /// `writeCursor` as rounds complete. 0 = never fetched before (full dump).
+    private var historyCursor: UInt32 = 0
+    /// True while one history-fetch round (flush_buffer + get_events(max:255) + its internal ack-chain)
+    /// is in flight, so `didUpdateValueFor` only routes a `0x11` response into the driver while one is
+    /// actually expected, and `advance`'s generic `.streaming` case can tell "auth just completed" from
+    /// "a history round just finished".
+    private var historyFetchInFlight = false
+    /// How many decoded events landed during the CURRENT round (diagnostic only, logged when the round
+    /// finishes, so a strap-log export can prove whether a history fetch actually delivered anything
+    /// rather than just exchanging the meta 0x11 acks).
+    private var historyEventsThisRound = 0
+    /// Per-type breakdown of decoded events during the CURRENT round (diagnostic only), so a strap-log
+    /// export can show WHICH signals a round actually delivered — a huge total with almost no
+    /// `sleepPhase` entries proves the fetched window covers mostly-awake stretches (the ring only emits
+    /// sleep-phase codes once it has classified the wearer as asleep) rather than pointing at a bug in
+    /// the sleep pipeline itself.
+    private var historyEventTypeCountsThisRound: [String: Int] = [:]
+    /// Min/max computed `ts` (unix seconds) actually stamped on a buffered batch during the CURRENT
+    /// round (diagnostic only) — lets a strap-log export show the REAL calendar date range a round's
+    /// events landed under, so a clock-anchor mis-projection (e.g. a wrong assumed tick rate placing
+    /// events years off) is immediately visible instead of silently landing outside every scored day.
+    private var historyTsRangeThisRound: (min: Int, max: Int)?
+    /// Same as `historyTsRangeThisRound` but ONLY for batches containing a `sleepPhase` event
+    /// (diagnostic only) — the whole-round range mixes every event type, so it can't say whether the
+    /// ring's OWN sleep-phase codes specifically landed in a plausible recent night or somewhere else
+    /// entirely; this isolates just that signal.
+    private var historySleepPhaseTsRangeThisRound: (min: Int, max: Int)?
+    /// `historyCursor`'s value when the CURRENT round started, so a round's end can tell "this round
+    /// found more data" (cursor moved, in EITHER direction — a real capture showed it isn't always
+    /// forward) from "genuinely nothing left" (cursor unchanged).
+    private var historyCursorAtRoundStart: UInt32 = 0
+    /// How many rounds have auto-continued within the CURRENT trigger (reset at the start of every
+    /// `requestHistoryFetch`). Capped by `maxHistoryRoundsPerTrigger` so a single connect/periodic tick
+    /// can walk further back through the ring's buffer (each round only covers roughly an hour of real
+    /// time in practice) without needing many separate reconnects — while still bounded, since the
+    /// cursor's real semantics remain only partially understood (OURA_PROTOCOL.md s5.3 is an admittedly
+    /// unverified "optional path").
+    private var historyRoundsThisTrigger = 0
+    private let maxHistoryRoundsPerTrigger = 10
+    /// Re-checks for newly-banked history while connected (mirrors WHOOP's periodic backfill timer).
+    private var backfillTimer: Timer?
+    private let backfillIntervalSeconds: TimeInterval = 900   // 15 min, matches BackfillPolicy's floor
+
     // MARK: - Init
 
     /// - Parameters:
@@ -189,7 +252,9 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 log: @escaping (String) -> Void = { _ in },
                 onBattery: @escaping (Int) -> Void = { _ in },
                 feedsLive: Bool = true,
-                adoptIntent: Bool = false) {
+                adoptIntent: Bool = false,
+                readCursor: @escaping (@escaping (Int?) -> Void) -> Void = { $0(nil) },
+                writeCursor: @escaping (Int) -> Void = { _ in }) {
         self.live = live
         self.deviceId = deviceId
         self.ringGen = ringGen
@@ -199,9 +264,18 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         self.onBattery = onBattery
         self.feedsLive = feedsLive
         self.adoptIntent = adoptIntent
+        self.readCursor = readCursor
+        self.writeCursor = writeCursor
         super.init()
         // Dedicated queue-less central -> callbacks arrive on the main queue, matching @MainActor.
         self.central = CBCentralManager(delegate: self, queue: nil)
+        // Seed the in-memory history cursor once from durable storage (a fresh device / never-fetched
+        // ring resolves to 0 == full dump). Loaded eagerly (no BLE needed) so the first connect-triggered
+        // fetch already knows where to resume.
+        self.readCursor { [weak self] cursor in
+            guard let self, let cursor else { return }
+            self.historyCursor = UInt32(clamping: cursor)
+        }
     }
 
     // MARK: - Scanning
@@ -261,6 +335,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         stopScan()
         pendingConnectID = nil
         stopReengageTimer()
+        stopBackfillTimer()
         if let p = peripheral { central.cancelPeripheralConnection(p) }
         peripheral = nil
         writeCharacteristic = nil
@@ -273,8 +348,11 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         adoptPhase = .idle
         batteryPct = nil
         needsPairing = nil
+        clockAnchor = nil
+        historyFetchInFlight = false
+        historyRoundsThisTrigger = 0
         flush()                       // persist anything still buffered
-        if feedsLive { live.connected = false; live.streamingLiveHR = false }
+        if feedsLive { live.connected = false; live.streamingLiveHR = false; live.backfilling = false }
     }
 
     // MARK: - Driver wiring
@@ -319,6 +397,13 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 if feedsLive { live.streamingLiveHR = true }   // drive the green menu-bar STREAMING pill (no WHOOP bond)
                 log("Oura: live-HR enabled - streaming HR / IBI")
                 startReengageTimer()
+                startBackfillTimer()
+                // Give live-HR a moment to settle before pulling history (mirrors BLEManager's 1.5s
+                // post-handshake backfill kick), so the very first connect also catches up on whatever
+                // banked while the ring was disconnected (sleep, HR/HRV/SpO2/temp).
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    self?.requestHistoryFetch(trigger: .connect)
+                }
             }
         default:
             break
@@ -385,11 +470,75 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         return Data(bytes)
     }
 
+    /// Short diagnostic label per decoded event case, for the history-round type-breakdown log line only
+    /// (never persisted, never affects scoring).
+    private static func eventTypeLabel(_ e: OuraEvent) -> String {
+        switch e {
+        case .hr: return "hr"
+        case .ibi: return "ibi"
+        case .hrv: return "hrv"
+        case .spo2: return "spo2"
+        case .temp: return "temp"
+        case .battery: return "battery"
+        case .sleepPhase: return "sleepPhase"
+        case .motion: return "motion"
+        case .state: return "state"
+        case .timeSync: return "timeSync"
+        case .rtcBeacon: return "rtcBeacon"
+        case .debugText: return "debugText"
+        case .tierB: return "tierB"
+        }
+    }
+
+    /// The MEDIAN ring-timestamp across a batch's events, so ONE corrupted value (a decode/reassembly
+    /// glitch) can't single-handedly poison the batch's stamped time the way picking the last one could
+    /// — a real capture showed exactly that: an occasional wild outlier landing last and projecting an
+    /// otherwise-normal batch years into the future via the clock anchor. Requires the MAJORITY of a
+    /// batch's ring-timestamps to be corrupted before the median itself would be wrong.
+    private static func medianRingTimestamp(_ events: [OuraEvent]) -> UInt32? {
+        let sorted = events.compactMap(\.ringTimestamp).sorted()
+        guard !sorted.isEmpty else { return nil }
+        return sorted[sorted.count / 2]
+    }
+
     // MARK: - Buffer / persistence
+
+    /// The bulk of ring-timestamps a batch should plausibly carry, relative to the current anchor: the
+    /// ring only buffers a matter of days (a Gen3 holds ~7), so anything beyond a generous 30-day tick
+    /// span either side of the anchor is a decode/reassembly glitch (observed on a real device: an
+    /// occasional corrupted ring-timestamp — `debugText` is the leading suspect, an exotic tag with
+    /// thinner framing guarantees — projected a batch years into the future via the SAME anchor that
+    /// correctly placed every other batch in the actual recent past).
+    private static let maxPlausibleTickDelta: Int64 = 30 * 24 * 60 * 60 * 10   // 30 days at 100 ms/tick
 
     private func enqueue(_ events: [OuraEvent]) {
         guard !events.isEmpty else { return }
-        buffer.append((events: events, ts: Int(Date().timeIntervalSince1970)))
+        // Stamp this batch at the CORRECT time: once a clock anchor exists, convert the batch's own
+        // representative ring-time (the record events carry, s5.5) rather than "now". For a batch that
+        // just arrived live this lands within a second or so of arrival wall-clock (unchanged in
+        // practice); for a backfilled historical batch it's the difference between the real overnight
+        // time and "now" (wrong). Before the first time-sync/RTC-beacon of a session, fall back to
+        // arrival wall-clock exactly as before (there is nothing else to anchor to yet).
+        let ts: Int
+        if let anchor = clockAnchor, let rt = Self.medianRingTimestamp(events) {
+            // Reject an implausible outlier rather than propagate it: fall back to the anchor's OWN
+            // instant (still real data, just coarser-dated) instead of a wild multi-year jump.
+            let delta = abs(Int64(rt) - Int64(anchor.ringTime))
+            ts = delta <= Self.maxPlausibleTickDelta
+                ? anchor.utcSeconds(forRingTime: rt)
+                : anchor.utcSeconds(forRingTime: anchor.ringTime)
+        } else {
+            ts = Int(Date().timeIntervalSince1970)
+        }
+        buffer.append((events: events, ts: ts))
+        if historyFetchInFlight {
+            let range = historyTsRangeThisRound
+            historyTsRangeThisRound = (min: min(range?.min ?? ts, ts), max: max(range?.max ?? ts, ts))
+            if events.contains(where: { if case .sleepPhase = $0 { return true }; return false }) {
+                let spRange = historySleepPhaseTsRangeThisRound
+                historySleepPhaseTsRangeThisRound = (min: min(spRange?.min ?? ts, ts), max: max(spRange?.max ?? ts, ts))
+            }
+        }
         if buffer.count >= flushCount || Date().timeIntervalSince(lastFlush) >= flushInterval {
             flush()
         }
@@ -412,6 +561,10 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// immediately (it is a status, not a sample row). Out-of-range HR is dropped, never shown.
     private func ingest(_ events: [OuraEvent]) {
         guard !events.isEmpty else { return }
+        if historyFetchInFlight {
+            historyEventsThisRound += events.count
+            for e in events { historyEventTypeCountsThisRound[Self.eventTypeLabel(e), default: 0] += 1 }
+        }
         for e in events {
             switch e {
             case .hr(let hr):
@@ -430,6 +583,23 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 batteryPct = bat.percent
                 onBattery(bat.percent)
                 log("Oura: battery \(bat.percent)%")
+            case .timeSync(let sync):
+                // Primary anchor (OURA_PROTOCOL.md s5.5): always wins over whatever's current, since a
+                // fresh time-sync is the ring's own most-authoritative UTC correlation.
+                clockAnchor = OuraClockAnchor(ringTime: sync.ringTimestamp, utcMs: sync.epochMs)
+                // Diagnostic only: the ring's OWN claimed date for this anchor. If this looks wrong
+                // (not roughly "now"), the anchor itself — not the tick-rate math applied to it — is the
+                // problem; if this looks RIGHT but backfilled events still land on the wrong day, the
+                // 100ms/tick assumption applied to ring-time deltas away from this point is the suspect.
+                let anchorDate = Date(timeIntervalSince1970: Double(sync.epochMs) / 1000)
+                log("Oura: time-sync anchor ringTime=\(sync.ringTimestamp) -> \(anchorDate)")
+            case .rtcBeacon(let beacon):
+                // Secondary, coarser (1s granularity) source - only fills a gap, never overrides a
+                // real time-sync anchor.
+                if clockAnchor == nil {
+                    clockAnchor = OuraClockAnchor(ringTime: beacon.ringTimestamp,
+                                                   utcMs: Int64(beacon.unixSeconds) * 1000)
+                }
             default:
                 break   // HRV / SpO2 / temp / sleep-phase persist via the buffer, not live state
             }
@@ -457,6 +627,124 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private func reengageLiveHR() {
         guard let driver, reachedStreaming else { return }
         write(driver.reengageLiveHRCommands())
+    }
+
+    // MARK: - History fetch (backfill of sleep / HR / HRV / SpO2 / temp banked while disconnected)
+
+    private func startBackfillTimer() {
+        stopBackfillTimer()
+        let t = Timer.scheduledTimer(withTimeInterval: backfillIntervalSeconds, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.requestHistoryFetch(trigger: .periodic) }
+        }
+        backfillTimer = t
+    }
+
+    private func stopBackfillTimer() {
+        backfillTimer?.invalidate()
+        backfillTimer = nil
+    }
+
+    /// Kick a history-fetch pass, gated by the SAME rate-limiter WHOOP's backfill uses
+    /// (`BackfillPolicy` - no WHOOP-specific assumptions, reused as-is) so an automatic trigger
+    /// (`.connect` / `.periodic`) can't hammer the ring; a future manual trigger would bypass it exactly
+    /// like WHOOP's `.manual` does. No-op while discovery-only (`!feedsLive`), not yet streaming, or a
+    /// round is already in flight.
+    private func requestHistoryFetch(trigger: BackfillTrigger) {
+        guard feedsLive, reachedStreaming, !historyFetchInFlight else { return }
+        let now = Date().timeIntervalSince1970
+        let rateLimitKey = "ouraBackfillLastAt:\(deviceId)"
+        let last = UserDefaults.standard.object(forKey: rateLimitKey) as? TimeInterval
+        guard BackfillPolicy.shouldRun(trigger: trigger, now: now, lastBackfillAt: last) else { return }
+        UserDefaults.standard.set(now, forKey: rateLimitKey)
+        live.backfilling = true
+        live.syncChunksThisSession = 0
+        historyRoundsThisTrigger = 0
+        write([OuraCommands.syncTime(unixSeconds: Int(now))])
+        startHistoryRound()
+    }
+
+    /// Begin a round: flush the ring's flash buffer and fetch from `historyCursor`.
+    /// `historyFetchInFlight` gates `didUpdateValueFor` so the `0x11` response it triggers is actually
+    /// routed here rather than falling through to the TLV decoder.
+    private func startHistoryRound() {
+        guard driver != nil else { return }
+        historyFetchInFlight = true
+        historyRoundsThisTrigger += 1
+        historyCursorAtRoundStart = historyCursor
+        historyEventsThisRound = 0
+        historyEventTypeCountsThisRound = [:]
+        historyTsRangeThisRound = nil
+        historySleepPhaseTsRangeThisRound = nil
+        log("Oura: requesting history from cursor \(historyCursor) (round \(historyRoundsThisTrigger)/\(maxHistoryRoundsPerTrigger))")
+        advance(.startHistoryFetch(cursor: historyCursor))
+    }
+
+    /// Handle the ring's `0x11` GetEvents-response (OURA_PROTOCOL.md s5.2), reached only while
+    /// `historyFetchInFlight`. Feeds the driver's own ack-chain (it may return another max-0 ack-fetch
+    /// while `moreData` stays true); once the driver reports back to `.streaming` this round is done and
+    /// `finishHistoryRound` decides whether to drain another round or stop.
+    private func handleGetEventsResponse(_ body: [UInt8]) {
+        guard let resp = OuraDecoders.decodeGetEventsResponse(body) else { return }
+        log("Oura: history page received (moreData=\(resp.moreData), cursor=\(resp.lastRingTimestamp))")
+        live.syncChunksThisSession += 1
+        // Only trust the reported cursor while it's carrying real progress. Observed on a real ring: the
+        // TERMINAL "no more data" response can come back with cursor=0 instead of echoing the last real
+        // position it actually reached - blindly persisting THAT would silently roll the durable cursor
+        // back to 0 and discard real progress, re-fetching everything from scratch next time. A response
+        // that still says "more data follows" always carries the meaningful new cursor, so only advance
+        // (and persist) on those; a terminal response's cursor field is not trusted.
+        if resp.moreData {
+            historyCursor = resp.lastRingTimestamp
+            writeCursor(Int(historyCursor))
+        }
+        advance(.historyCursorAdvanced(cursor: resp.lastRingTimestamp, moreData: resp.moreData))
+        guard driver?.phase == .streaming else { return }   // the driver's own ack-chain isn't done yet
+        finishHistoryRound()
+    }
+
+    /// One round just drained back to `.streaming`. Auto-continues into another round when the cursor
+    /// actually moved this round (in EITHER direction — a real capture showed it isn't always forward)
+    /// AND the per-trigger cap hasn't tripped, so one connect/periodic tick can walk further back
+    /// through the ring's buffer instead of needing a separate reconnect per ~hour of real backfill data.
+    /// Bounded at `maxHistoryRoundsPerTrigger`: the cursor/max_events semantics this was built against
+    /// (OURA_PROTOCOL.md s5.3, an "optional path" the docs already flagged as unverified) are still only
+    /// partially understood, so this stays a capped burst, never an unbounded loop — the next burst
+    /// happens on the next periodic tick or reconnect.
+    private func finishHistoryRound() {
+        historyFetchInFlight = false
+        log("Oura: history round decoded \(historyEventsThisRound) event(s) (cursor now \(historyCursor))")
+        // Per-type breakdown, biggest first: proves WHICH signals a round actually delivered, so a huge
+        // total with near-zero sleepPhase entries reads as "this window is mostly awake data" rather than
+        // a silent, unexplained gap in the sleep pipeline.
+        let breakdown = historyEventTypeCountsThisRound.sorted { $0.value > $1.value }
+            .map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        log("Oura: history round event types: \(breakdown)")
+        // Diagnostic only: the REAL calendar-date range this round's events were stamped under, after
+        // clock-anchor conversion. If this doesn't look like a plausible recent range, the anchor/tick-
+        // rate math (not the sleep pipeline) is placing events outside every day IntelligenceEngine scores.
+        if let range = historyTsRangeThisRound {
+            let minDate = Date(timeIntervalSince1970: Double(range.min))
+            let maxDate = Date(timeIntervalSince1970: Double(range.max))
+            log("Oura: history round ts range: \(minDate) to \(maxDate)")
+        }
+        // Isolates JUST the sleepPhase signal's own date range (the whole-round range above mixes every
+        // event type, so it can't say whether the ring's OWN sleep-phase codes landed in a plausible
+        // recent night or somewhere else — this settles it directly).
+        if let range = historySleepPhaseTsRangeThisRound {
+            let minDate = Date(timeIntervalSince1970: Double(range.min))
+            let maxDate = Date(timeIntervalSince1970: Double(range.max))
+            log("Oura: history round sleepPhase ts range: \(minDate) to \(maxDate)")
+        }
+        let progressed = historyCursor != historyCursorAtRoundStart
+        if progressed, historyRoundsThisTrigger < maxHistoryRoundsPerTrigger {
+            log("Oura: continuing to next round (\(historyRoundsThisTrigger)/\(maxHistoryRoundsPerTrigger) so far)")
+            startHistoryRound()
+        } else {
+            let reason = progressed ? "round cap reached" : "no further progress"
+            live.backfilling = false
+            live.lastSyncedAt = Date().timeIntervalSince1970
+            log("Oura: history sync complete (\(reason); cursor=\(historyCursor), \(historyRoundsThisTrigger) round(s) this trigger)")
+        }
     }
 
     // MARK: - Honest needs-pairing fallback (Huami precedent)
@@ -566,6 +854,8 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         pendingInstallKey = nil
         adoptPhase = .idle
         reassembler.reset()
+        clockAnchor = nil                  // re-acquire a fresh anchor from this session's own time-sync
+        historyFetchInFlight = false
         peripheral.discoverServices([Self.service])
     }
 
@@ -596,6 +886,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
             log("Oura: disconnected (clean)")
         }
         stopReengageTimer()
+        stopBackfillTimer()
         driver?.stop()
         driver = nil
         reassembler.reset()
@@ -607,8 +898,13 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         // the completed `.streaming` outcome intact so the wizard's success transition isn't undone.
         if adoptPhase == .installingKey { adoptPhase = .failed }
         batteryPct = nil
+        clockAnchor = nil
+        // A disconnect mid-round leaves historyCursor at wherever the LAST completed round persisted it
+        // (never advanced past an unacknowledged round), so the next fetch safely resumes from there.
+        historyFetchInFlight = false
+        historyRoundsThisTrigger = 0
         flush()
-        if feedsLive { live.connected = false; live.streamingLiveHR = false }
+        if feedsLive { live.connected = false; live.streamingLiveHR = false; live.backfilling = false }
         if self.peripheral?.identifier == peripheral.identifier { self.peripheral = nil }
         // An involuntary drop (ring went out of range, link timed out) otherwise dead-ends here with no
         // recovery until the user manually reconnects (#- the ring just sits disconnected). Reschedule a
@@ -706,6 +1002,16 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
         if pendingInstallKey != nil,
            let ackFrame = frames.first(where: { $0.op == Self.setAuthKeyRespOp }) {
             handleKeyInstallAck(status: ackFrame.body.first ?? 0xFF)
+            return
+        }
+        // The `0x11` GetEvents-response is ALSO an outer frame (NOT a TLV record, despite riding the
+        // same channel a history fetch's actual event records use): `11 08 <status> <sub_status>
+        // <last_ring_timestamp:4 LE> <pad:2>`. It only ever arrives while a history-fetch round is in
+        // flight, so handle it ONLY then; otherwise it is ignored (never fed to the TLV decoder, where
+        // its op byte would be misread as a record type). Per OURA_PROTOCOL.md s5.2.
+        if historyFetchInFlight,
+           let eventsFrame = frames.first(where: { $0.op == Self.getEventsRespOp }) {
+            handleGetEventsResponse(eventsFrame.body)
             return
         }
         if frames.contains(where: { $0.op == OuraFraming.secureSessionOp }) {

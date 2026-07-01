@@ -342,7 +342,16 @@ bits 14–15 : qual_b
 - Voltage as **uint16 LE at body offset [4..6]** per [open_ring]. **CONFLICT:** [open_oura-r3] reads percent at body[0]; [open_ring] reads voltage at [4]. **NOOP rule:** read percent at body[0]; derive a voltage-based estimate from [4..6] only as a fallback, fixture-validated per generation.
 
 ### 6.11 Time-sync ind - `0x42` (15 B)
-- Bytes 6–13: **int64 LE epoch milliseconds**; byte 14: int8 timezone offset in 30-min units (×1800 = seconds). [ringverse]
+- Bytes 6–13: **int64 LE epoch SECONDS** (not milliseconds — see correction below); byte 14: int8
+  timezone offset in 30-min units (×1800 = seconds).
+- **CORRECTION (NOOP real-device capture, 2026-07-01):** [ringverse] documents this field as epoch
+  *milliseconds*, cited above until now. A live Gen3 ring's own `0x42` event decoded to a value that,
+  taken as milliseconds, placed the anchor at 1970-01-21 — but that same raw value × 1000 lands almost
+  exactly on the real current date. The wire value is epoch **seconds**. NOOP's decoder
+  (`OuraDecoders.decodeTimeSync`) now multiplies by 1000 at the source so `OuraTimeSync.epochMs` keeps
+  a real millisecond value for every consumer (the §5.5 clock-anchor conversion). Unverified whether
+  this is universal across generations/firmware or specific to the captured Gen3 unit — treat as
+  Gen3-confirmed, not yet cross-checked on Gen4/5.
 - This is the primary UTC anchor (§5.5). [open_ring][ringverse]
 
 ### 6.12 Sleep architecture

@@ -248,6 +248,17 @@ public enum AnalyticsEngine {
                                   // pure-function callers/tests free of it; IntelligenceEngine threads the
                                   // night window's persisted band state. (#531 / H8 consume)
                                   bandSleepState: [(ts: Int, state: Int)] = [],
+                                  // Sessions detected OUT-OF-BAND from gravity — built from a device's OWN
+                                  // reported sleep-phase classification instead of motion (e.g.
+                                  // `SleepStager.detectSleepFromPhaseEvents` for an Oura ring, which has no
+                                  // accelerometer stream at all, so `detectSleep`'s gravity gate would
+                                  // otherwise return `[]` for every one of its nights no matter how much
+                                  // other data it supplies). Unioned with the gravity-detected sessions
+                                  // below; every downstream step (day-matching, main-night selection,
+                                  // AASM aggregation) already operates purely on `SleepSession` fields, so
+                                  // it needs no other change. Default empty keeps pure-function
+                                  // callers/tests and every WHOOP/generic-strap call site byte-identical.
+                                  oobSleepSessions: [SleepSession] = [],
                                   // Opt-in experimental sleep staging (V2). When true, detected nights are
                                   // staged by `SleepStagerV2` instead of V1. Default false keeps V1 the
                                   // byte-identical default for pure-function callers/tests; IntelligenceEngine
@@ -266,11 +277,13 @@ public enum AnalyticsEngine {
                                   traceSink: ((String) -> Void)? = nil) -> DayResult {
 
         // ── Sleep detection + staging ─────────────────────────────────────────
+        // Gravity-detected sessions UNION any out-of-band sessions (e.g. Oura's phase-code path) —
+        // empty for every device that doesn't supply them, so this is a no-op everywhere else.
         let allSessions = SleepStager.detectSleep(hr: hr, rr: rr, resp: resp, gravity: gravity,
                                                   tzOffsetSeconds: tzOffsetSeconds, wristOff: wristOff,
                                                   bandSleepState: bandSleepState,
                                                   useSleepStagerV2: useSleepStagerV2,
-                                                  traceSink: traceSink)
+                                                  traceSink: traceSink) + oobSleepSessions
         // Sessions attributed to `day` = those whose end falls on `day` (LOCAL day, #277). `day` is
         // the caller's local-day key; attribute by the same offset so the bucket and the key agree.
         let matched = allSessions.filter { dayString($0.end, offsetSec: tzOffsetSeconds) == day }

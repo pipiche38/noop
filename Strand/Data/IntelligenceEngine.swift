@@ -107,6 +107,12 @@ final class IntelligenceEngine: ObservableObject {
         /// Empty unless the Steps mode is active (the gate is read once before the loop), so the default path
         /// is byte-identical: the trace recomputes the SAME wrap-aware sum analyzeDay already computed.
         let stepsTrace: [String]
+        /// Out-of-band (device-reported phase code) sleep diagnostic for this day, so a strap-log export
+        /// PROVES whether the Oura path actually found phase events + turned them into sessions, instead of
+        /// leaving `totalSleepMin=nil` unexplained. nil when the device wrote no phase-code events at all
+        /// (every WHOOP/generic strap) — so this is silent for the common case and only appears for a
+        /// device actually exercising the out-of-band path.
+        let oobSleepLine: String?
     }
 
     struct Computed: Identifiable {
@@ -447,20 +453,41 @@ final class IntelligenceEngine: ObservableObject {
                                                        registry: registry, fallbackDeviceId: ownerFallbackId)
 
                 let hr = (try? await store.hrSamples(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
-                guard hr.count >= 200 else { continue }   // need real raw data, not a stray sample
                 let rr = (try? await store.rrIntervals(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
-                let resp = (try? await store.respSamples(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
-                let grav = (try? await store.gravitySamples(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
-                let steps = (try? await store.stepSamples(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
-                let skin = (try? await store.skinTempSamples(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
                 // Wrist-wear events in the night window, paired into off-wrist [start, end) intervals for the
                 // off-wrist sleep backstop (#500). The HR-gap proxy in the stager is the always-on guard;
                 // these explicit intervals sharpen it under the FRACTIONAL rule (#504) , a session is dropped
                 // only when its off-wrist coverage reaches maxOffWristSleepFraction, so a real night with a
                 // short off-wrist tail survives. Pairing needs WRIST_ON too (to bound each interval); a span
                 // still open at the window end closes at `to`. Empty when the strap emitted no wrist events.
-                let wristEvents = (try? await store.events(deviceId: owner, from: from, to: to, limit: 50_000)) ?? []
-                let wristOff = AnalyticsEngine.offWristIntervals(events: wristEvents, windowEnd: to)
+                // Read BEFORE the density guard below: a day whose sleep-phase events are the ONLY real
+                // signal it has (an Oura night with rich sleep-phase but under-200 hr/rr for THIS specific
+                // day) must not be skipped before its out-of-band sleep path ever gets to look at them.
+                let nightEvents = (try? await store.events(deviceId: owner, from: from, to: to, limit: 50_000)) ?? []
+                // Out-of-band sleep sessions built from a device's OWN reported phase codes instead of
+                // gravity (e.g. Oura's OURA_SLEEP_PHASE, decoded from its Tier-A verified 0x4E/0x5A tag).
+                // Empty for any device that never writes this event kind (every WHOOP/generic strap), so
+                // `analyzeDay`'s union below is a no-op there. `detectSleep`'s gravity gate otherwise
+                // returns [] for EVERY Oura night regardless of backfill quality — this is the fix.
+                let oobPhaseEvents: [(ts: Int, phase: Int)] = nightEvents
+                    .filter { $0.kind == OuraStreamMapping.sleepPhaseEventKind }
+                    .compactMap { e in
+                        guard case .int(let p)? = e.payload["phase"] else { return nil }
+                        return (ts: e.ts, phase: p)
+                    }
+                // Need real raw data, not a stray sample. Either dense continuous HR (WHOOP/live-HR), dense
+                // RR/IBI, OR any out-of-band phase events clears the floor: a device that only backfills
+                // historical RR/IBI + its own sleep-phase codes (e.g. Oura — live-HR pushes never ride the
+                // history TLV stream, so a backfilled night has rich RR but near-zero bpm samples) must
+                // still reach `analyzeDay` rather than being skipped here before its out-of-band sleep path
+                // ever runs.
+                guard hr.count >= 200 || rr.count >= 200 || !oobPhaseEvents.isEmpty else { continue }
+                let resp = (try? await store.respSamples(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
+                let grav = (try? await store.gravitySamples(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
+                let steps = (try? await store.stepSamples(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
+                let skin = (try? await store.skinTempSamples(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
+                let wristOff = AnalyticsEngine.offWristIntervals(events: nightEvents, windowEnd: to)
+                let oobSleepSessions = SleepStager.detectSleepFromPhaseEvents(oobPhaseEvents, hr: hr, rr: rr)
 
                 // Calendar-day window for the ADDITIVE daily totals (steps + calories). The night window
                 // above is anchored to the current time-of-day and ends at dayStart+12h, so for a PAST
@@ -511,10 +538,19 @@ final class IntelligenceEngine: ObservableObject {
                                                      tzOffsetSeconds: tzOffset, wristOff: wristOff,
                                                      habitualMidsleepSec: habitualMidsleepSec,
                                                      bandSleepState: bandSleepState,
+                                                     oobSleepSessions: oobSleepSessions,
                                                      // #690: thread the V2 toggle into the NORMAL staging path so
                                                      // it affects detected nights, not just the self-heal restage.
                                                      useSleepStagerV2: useSleepStagerV2,
                                                      traceSink: traceSink)
+                // Out-of-band sleep diagnostic: PROVE whether the phase-code path actually found events
+                // and turned them into a session, rather than leaving a puzzling `totalSleepMin=nil` with
+                // no way to tell "no phase events landed" from "they landed but got dropped/dated
+                // elsewhere". nil (silent) for every day with no phase-code events at all.
+                let oobSleepLine: String? = oobPhaseEvents.isEmpty ? nil :
+                    "oura sleep day=\(day) phaseEvents=\(oobPhaseEvents.count) "
+                    + "oobSessions=\(oobSleepSessions.count) totalSleepMin="
+                    + (res.daily.totalSleepMin.map { String(Int($0.rounded())) } ?? "nil")
                 // ── Steps test mode: 5/MG raw-counter trace ──────────────────────────────────────────────
                 // Only built when the Steps mode is on (the gate was read once before the loop). Recomputes
                 // the SAME wrap-aware @57 sum analyzeDay just ran, over the SAME `daySteps` calendar-day
@@ -552,7 +588,8 @@ final class IntelligenceEngine: ObservableObject {
                 }
                 out.append(DayScan(result: res, rhrLine: rhrLine,
                                    readOwner: owner, hrRows: hr.count,
-                                   sleepTrace: sleepTrace, stepsTrace: stepsTrace))
+                                   sleepTrace: sleepTrace, stepsTrace: stepsTrace,
+                                   oobSleepLine: oobSleepLine))
             }
             return out
         }.value
@@ -575,6 +612,7 @@ final class IntelligenceEngine: ObservableObject {
             nightlyRespByDay[res.daily.day] = res.daily.respRateBpm
             nightlySkinByDay[res.daily.day] = res.nightlySkinTempC
             if let line = scan.rhrLine { diagnosticSink?(line, nil) }
+            if let line = scan.oobSleepLine { diagnosticSink?(line, nil) }
             // Sleep & Rest test mode (E5): replay this day's gate-trace + Rest lines tagged `.sleep` so they
             // land under the profile tag in the export. Empty unless the mode is active.
             for line in scan.sleepTrace { diagnosticSink?(line, .sleep) }

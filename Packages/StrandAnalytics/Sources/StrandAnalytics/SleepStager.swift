@@ -895,6 +895,97 @@ public enum SleepStager {
         return min(1.0, asleep / inBed)
     }
 
+    // MARK: - Out-of-band detection (a device's OWN reported phase codes, no gravity required)
+
+    /// Build sleep sessions directly from a device's OWN reported sleep-phase classification (a 2-bit
+    /// awake/light/deep/REM code per sample) instead of gravity-derived stillness. `detectSleep` hard-
+    /// requires `gravity.count >= 2` and returns `[]` otherwise (line ~750), so a device with no
+    /// motion/accelerometer stream (e.g. an Oura ring) can never be scored through that path no matter
+    /// how much other data it supplies — this is the alternate path for exactly that case.
+    ///
+    /// Pure, gravity-free, honest: every segment width comes from a REAL observed gap between the
+    /// device's own reported timestamps, never an assumed epoch duration (the per-code sub-record
+    /// timing isn't verified for e.g. Oura's `0x4E`/`0x5A` tag, OURA_PROTOCOL.md s6.12). Trusts the
+    /// device's own onboard classification instead of re-deriving WHOOP's motion-based guard stack
+    /// (daytime false-sleep / off-wrist / morning-stillness) — a different, but not unreasonable,
+    /// source of truth for a fundamentally different sensor.
+    ///
+    /// - Parameters:
+    ///   - phaseEvents: `(ts, phase)` pairs, `phase` 0=awake/1=light/2=deep/3=rem. Several events can
+    ///     legitimately share one `ts` (they came from the same underlying record/notification batch,
+    ///     the finest resolution actually available); majority vote picks that instant's stage.
+    ///   - hr/rr: the SAME night's raw HR/RR streams, for `sessionRestingHR`/`sessionAvgHRV` below
+    ///     (typically nil/populated respectively for a device with rich RR but sparse historical HR).
+    public static func detectSleepFromPhaseEvents(_ phaseEvents: [(ts: Int, phase: Int)],
+                                                   hr: [HRSample] = [],
+                                                   rr: [RRInterval] = []) -> [SleepSession] {
+        guard !phaseEvents.isEmpty else { return [] }
+
+        // 1. Group by distinct ts; majority-vote the phase per group -> one "instant" per timestamp.
+        var byTs: [Int: [Int]] = [:]
+        for e in phaseEvents { byTs[e.ts, default: []].append(e.phase) }
+        let instants: [(ts: Int, phase: Int)] = byTs.keys.sorted().map { ts in
+            let counts = Dictionary(grouping: byTs[ts]!, by: { $0 }).mapValues(\.count)
+            return (ts: ts, phase: counts.max { $0.value < $1.value }!.key)
+        }
+
+        // 2. Split into candidate blocks on any gap > nightContinuationGapMin (reuses the SAME
+        // tuning WHOOP's own night-continuation logic already uses, rather than a new threshold).
+        let gapS = nightContinuationGapMin * 60
+        var blocks: [[(ts: Int, phase: Int)]] = [[instants[0]]]
+        for inst in instants.dropFirst() {
+            if inst.ts - blocks[blocks.count - 1].last!.ts > gapS {
+                blocks.append([inst])
+            } else {
+                blocks[blocks.count - 1].append(inst)
+            }
+        }
+
+        let minSleepS = minSleepMin * 60
+        var sessions: [SleepSession] = []
+        for block in blocks {
+            guard block.count >= 2 else { continue }   // need >=2 instants for a real gap-derived span
+            let start = block[0].ts
+            // The trailing segment's end uses THIS block's own median inter-instant gap, not a
+            // fabricated constant, so the final reported code isn't silently zeroed out.
+            let gaps = zip(block, block.dropFirst()).map { $1.ts - $0.ts }
+            let medianGap = gaps.sorted()[gaps.count / 2]
+            let end = block.last!.ts + medianGap
+            guard end - start >= minSleepS else { continue }
+
+            var stages: [StageSegment] = []
+            var segStart = block[0].ts
+            var segPhase = block[0].phase
+            for i in 1..<block.count {
+                if block[i].phase != segPhase {
+                    stages.append(StageSegment(start: segStart, end: block[i].ts, stage: phaseLabel(segPhase)))
+                    segStart = block[i].ts
+                    segPhase = block[i].phase
+                }
+            }
+            stages.append(StageSegment(start: segStart, end: end, stage: phaseLabel(segPhase)))
+
+            sessions.append(SleepSession(start: start, end: end,
+                                         efficiency: efficiency(start: start, end: end, stages: stages),
+                                         stages: stages,
+                                         restingHR: sessionRestingHR(start: start, end: end, hr: hr),
+                                         avgHRV: sessionAvgHRV(start: start, end: end, rr: rr)))
+        }
+        return sessions
+    }
+
+    /// Map a device's raw 2-bit phase code to the shared stage label vocabulary. An out-of-range code
+    /// (never actually produced upstream — the source enum is closed to 0...3) honestly falls back to
+    /// "wake" rather than guessing a sleep stage.
+    private static func phaseLabel(_ phase: Int) -> String {
+        switch phase {
+        case 1: return "light"
+        case 2: return "deep"
+        case 3: return "rem"
+        default: return "wake"
+        }
+    }
+
     // MARK: - Stage 1–3: staging over a 30 s epoch grid
 
     /// First persistent-sleep epoch (onset) and last sleep epoch (final wake).
