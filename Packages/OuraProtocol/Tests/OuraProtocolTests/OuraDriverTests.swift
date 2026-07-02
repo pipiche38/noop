@@ -197,6 +197,33 @@ final class OuraDriverTests: XCTestCase {
         XCTAssertEqual(d.unixSeconds(forRingTimestamp: anchorRt + 100), Int(anchorEpochSeconds) + 10)
     }
 
+    /// BOUNDS FIX (2026-07-02 review): a record whose ringTimestamp is far enough from the anchor's own
+    /// ringTimestamp - e.g. because it belongs to a stale/mismatched ring session (the session counter is
+    /// known to shift across reconnects) - must never produce a wildly wrong-but-still-positive timestamp.
+    /// `unixSeconds` used to only check `ms > 0`; it now reuses the same plausible-epoch window that
+    /// already gates anchor-SETTING (`testImplausibleTimeSyncNeverCrashesOrAnchors`), applied to the
+    /// CONVERTED result too.
+    func testUnixSecondsRejectsResultOutsidePlausibleWindowEvenWithAGoodAnchor() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key)
+        let anchorEpochSeconds: Int64 = 1_700_000_000   // ~2023-11-14, itself a perfectly plausible anchor
+        let anchorRt: UInt32 = 10_000
+        let payload = le8(anchorEpochSeconds) + [0x00]
+        let rec = OuraRecord(type: OuraEventTag.timeSync.rawValue, ringTimestamp: anchorRt, payload: payload)
+        _ = d.ingest(record: rec)
+        XCTAssertEqual(d.unixSeconds(forRingTimestamp: anchorRt), Int(anchorEpochSeconds))   // sanity: anchor itself still resolves
+
+        // A ringTimestamp far enough ahead pushes the computed epoch past 2035 - reject, don't guess.
+        XCTAssertNil(d.unixSeconds(forRingTimestamp: UInt32.max))
+
+        // A ringTimestamp far enough BEHIND the anchor pushes the computed epoch before 2020 - the OLD
+        // `ms > 0` check would have happily accepted this (it lands well above zero); the fix must not.
+        let farPastAnchorRt: UInt32 = 4_000_000_000
+        let farPastPayload = le8(anchorEpochSeconds) + [0x00]
+        let farPastRec = OuraRecord(type: OuraEventTag.timeSync.rawValue, ringTimestamp: farPastAnchorRt, payload: farPastPayload)
+        _ = d.ingest(record: farPastRec)   // re-anchors at rt=4,000,000,000 / epoch 1,700,000,000
+        XCTAssertNil(d.unixSeconds(forRingTimestamp: 0))
+    }
+
     func testRtcBeaconOnlyAnchorsWhenNoTimeSyncSeenYet() {
         let d = OuraDriver(ringGen: .gen3, authKey: key)
         let beaconRt: UInt32 = 5_000

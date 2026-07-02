@@ -213,12 +213,21 @@ public final class OuraDriver {
     /// Convert a record's ring-clock timestamp to unix seconds using the current session's anchor
     /// (OURA_PROTOCOL.md s5.5). Returns nil when no anchor has arrived yet this session, so the caller
     /// can honestly fall back (e.g. to wall-clock arrival time) instead of guessing.
+    ///
+    /// BOUNDS FIX (2026-07-02 review): this used to only check `ms > 0`. A record whose `ringTimestamp`
+    /// belongs to a stale/mismatched session relative to the current anchor (the ring's session counter
+    /// is known to shift across reconnects, and a corrupt/misaligned record was already observed live
+    /// deep in a cursor=0 backlog dump) can produce a `deltaTicks` far from the real elapsed time, giving
+    /// a wildly wrong but still-positive result (e.g. a year-2071 or year-1990 timestamp) that the old
+    /// check would happily accept and persist. Reusing the SAME plausible-epoch window that already
+    /// gates anchor-SETTING (`plausibleAnchorMs`) closes the equivalent gap on the anchor-CONSUMING side.
     public func unixSeconds(forRingTimestamp rt: UInt32) -> Int? {
         guard let anchorUtcMs, let anchorRingTime else { return nil }
         let deltaTicks = Int64(rt) - Int64(anchorRingTime)
         let ms = anchorUtcMs + deltaTicks * 100
-        guard ms > 0 else { return nil }
-        return Int(ms / 1000)
+        let seconds = ms / 1000
+        guard seconds >= Self.minPlausibleEpochSeconds, seconds <= Self.maxPlausibleEpochSeconds else { return nil }
+        return Int(seconds)
     }
 
     /// Bounds for a plausible anchor epoch (unix seconds): 2020-01-01 to 2035-01-01. A decoded 0x42/0x85
