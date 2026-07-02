@@ -215,12 +215,14 @@ final class OuraDriverTests: XCTestCase {
         XCTAssertEqual(d.handleSecureFrame(statusFrame), .authStatus(.success))
 
         let ackFrame = OuraSecureFrame(subop: 0x23, subBody: [0x02, 0x00])
-        XCTAssertEqual(d.handleSecureFrame(ackFrame), .enableAck)
+        XCTAssertEqual(d.handleSecureFrame(ackFrame), .enableAck(subop: 0x23, body: [0x02, 0x00]))
 
         // s5.6 step 1: the dhr_read feature-read ACK (`2f 06 21 02 01 11 02 00`) is subop 0x21 with body
         // `02 01 11 02 00`. It must route to .enableAck or the enable triplet stalls at step 0 (#900).
+        // The body is carried through so a caller can inspect OTHER features' read responses too (e.g.
+        // the SpO2 diagnostic read).
         let dhrReadAck = OuraSecureFrame(subop: 0x21, subBody: bytes("0201110200"))
-        XCTAssertEqual(d.handleSecureFrame(dhrReadAck), .enableAck)
+        XCTAssertEqual(d.handleSecureFrame(dhrReadAck), .enableAck(subop: 0x21, body: bytes("0201110200")))
 
         // The push subBody is the 14 bytes AFTER `2f 0f 28` from the s5.6 wire frame (IBI at [5..6]).
         let pushBody = bytes("020002000001040000000000007f")

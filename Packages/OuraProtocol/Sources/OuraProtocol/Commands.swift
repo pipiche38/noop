@@ -119,6 +119,18 @@ public enum OuraCommands {
     public static func liveHREnableSequence() -> [OuraCommand] {
         [liveHRReadStatus(), liveHREnable(), liveHRSubscribe()]
     }
+
+    // MARK: - SpO2 feature status (diagnostic read only; s7.1)
+
+    /// Read the SpO2 feature status: `2f 02 20 04`. ACK: `2f 06 21 04 <mode> <status> <state> <sub>`
+    /// (by analogy with the DHR read ACK shape, s5.6 step 1). DIAGNOSTIC ONLY: NOOP does not enable or
+    /// subscribe SpO2 (the read-status ACK is inspected, logged raw, but never enabled) - SpO2 is
+    /// sleep-only on this hardware (confirmed against a real Gen 3 ring), so a live enable would never
+    /// stream anything during the day; the ring's own reported status is the fastest way to tell whether
+    /// SpO2 is even switched on for this ring (feature 0x04 is server-gated per s7.1) versus a code issue.
+    public static func spo2ReadStatus() -> OuraCommand {
+        OuraCommand(label: "spo2_read", bytes: [0x2F, 0x02, 0x20, featureSpO2])
+    }
 }
 
 // MARK: - Dangerous commands (quarantined)

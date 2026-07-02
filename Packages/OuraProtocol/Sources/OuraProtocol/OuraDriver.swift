@@ -337,8 +337,12 @@ public final class OuraDriver {
         // Live-HR enable ACKs advance the triplet (s5.6): 0x21 is the dhr_read feature-read ACK from
         // step 1 (`2f 06 21 02 01 11 02 00`), 0x23 acks the enable write (step 2), 0x27 acks the
         // subscribe write (step 3). All three must be recognised or the sequencer stalls at step 0.
+        // `subBody` is carried through (unused by the triplet's own advance, which only needs "an ack
+        // arrived") so a caller can inspect a feature READ response (0x21) for OTHER features - e.g. a
+        // one-shot SpO2 feature-status query - without the driver needing to understand every feature's
+        // status encoding.
         if frame.subop == 0x21 || frame.subop == 0x23 || frame.subop == 0x27 {
-            return .enableAck
+            return .enableAck(subop: frame.subop, body: frame.subBody)
         }
         return .unhandled
     }
@@ -348,7 +352,11 @@ public final class OuraDriver {
         case nonce([UInt8])
         case authStatus(OuraAuthStatus)
         case liveHRPush([UInt8])
-        case enableAck
+        /// A feature-status / enable / subscribe ACK (subop 0x21/0x23/0x27). `body` is the raw sub-body
+        /// so a caller can inspect a feature READ response (0x21) for diagnostics; the HR-enable triplet
+        /// itself only needs the fact an ack arrived (`OuraDriver.nextStep`'s `.enableAckReceived` case),
+        /// never this payload.
+        case enableAck(subop: UInt8, body: [UInt8])
         case unhandled
     }
 }

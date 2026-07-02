@@ -34,7 +34,9 @@ import OuraProtocol
 ///      then re-runs auth with the new key (s3.2). Without `adoptIntent` the dangerous opcode is NEVER sent;
 ///      we announce needs-pairing instead. A failed install is honest (Failed), never a fake success.
 ///   4. On auth success, run the gen-appropriate live-HR enable triplet; HR/IBI then streams as 0x2F
-///      sub-op 0x28 pushes which the driver decodes.
+///      sub-op 0x28 pushes which the driver decodes. Once streaming, also send a one-shot SpO2
+///      feature-status READ (diagnostic only - never enable/subscribe) so the ring's own reported
+///      mode/status tells us whether SpO2 is switched on for this ring, logged raw.
 ///   5. Decoded events map onto `Streams` via `OuraStreamMapping` and persist in 30/30s batches; live HR
 ///      also feeds `LiveState`; battery feeds `onBattery`.
 @MainActor
@@ -354,6 +356,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 if feedsLive { live.streamingLiveHR = true }   // drive the green menu-bar STREAMING pill (no WHOOP bond)
                 log("Oura: live-HR enabled - streaming HR / IBI")
                 startReengageTimer()
+                write([OuraCommands.spo2ReadStatus()])
             }
         default:
             break
@@ -771,7 +774,14 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
                 log("Oura: WARNING auth status \(status.rawValue)")
             }
             advance(.authCompleted(status))
-        case .enableAck:
+        case .enableAck(let subop, let body):
+            // A 0x21 feature-READ response for a feature we're not enabling (currently only SpO2, sent
+            // as a one-shot diagnostic - s7.1's feature-mode table) carries the ring's own reported
+            // status. Log it raw so we can tell "SpO2 is off/server-gated on this ring" from "our code
+            // is wrong" without guessing at the exact status-byte encoding.
+            if subop == 0x21, body.first == OuraCommands.featureSpO2 {
+                log("Oura: SpO2 feature status - \(body.map { String(format: "%02x", $0) }.joined(separator: " "))")
+            }
             advance(.enableAckReceived)
         case .liveHRPush(let body):
             guard let driver else { return }
