@@ -40,8 +40,8 @@ public enum OuraStreamMapping {
     ///   - `.temp`       (0x46/0x75)                    → `skinTemp:[SkinTempSample(raw_adc)]`
     ///   - `.sleepPhase` (0x4E/0x5A 2-bit codes)        → `events:[WhoopEvent(kind: OURA_SLEEP_PHASE)]`
     ///   - `.battery`                                   → `battery:[BatterySample]`
-    /// Every other event case (`.motion`, `.state`, `.timeSync`, `.rtcBeacon`, `.debugText`, `.tierB`)
-    /// is intentionally not folded into a durable stream here.
+    /// Every other event case (`.motion`, `.state`, `.timeSync`, `.rtcBeacon`, `.debugText`, `.tierB`,
+    /// `.activityInfo`) is intentionally not folded into a durable stream here.
     public static func streams(from events: [OuraEvent], at ts: Int) -> Streams {
         var out = Streams()
         for e in events {
@@ -99,9 +99,10 @@ public enum OuraStreamMapping {
                     mv: v.voltageMv,
                     charging: v.charging))
 
-            case .motion, .state, .timeSync, .rtcBeacon, .debugText, .tierB:
+            case .motion, .state, .timeSync, .rtcBeacon, .debugText, .tierB, .activityInfo:
                 // Not a durable per-device stream row (timeSync/rtcBeacon anchor the transport's clock;
-                // motion/state/debug are diagnostics; Tier-B is UNVERIFIED and must never feed scoring).
+                // motion/state/debug are diagnostics; Tier-B / activityInfo are UNVERIFIED and must never
+                // feed scoring).
                 continue
             }
         }

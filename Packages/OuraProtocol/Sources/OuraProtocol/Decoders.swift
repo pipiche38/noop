@@ -374,6 +374,26 @@ public enum OuraDecoders {
         }
         return out.isEmpty ? nil : out
     }
+
+    // MARK: - Activity info (0x50; s6.13) - Tier B, third-party formula
+
+    /// Decode the 0x50 activity_information record: byte0 = a "state" code (activity-category, meaning
+    /// unconfirmed), remaining bytes = a per-sample MET series. `met = byte * 0.1` for byte < 0x80, else
+    /// `met = 12.8 + (byte - 128) * 0.2`. THIRD-PARTY FORMULA, not from [ringverse]/[open_ring]/etc:
+    /// cited to Th0rgal/open_oura `crates/oura-protocol/src/events.rs` `decode_activity_info` (no-license,
+    /// clean-room-cited fact only, no code copied). Plausible against 3 real Gen 3 captures (21/21 decoded
+    /// values landed in a sane 1.3-3.3 sedentary/light-activity MET range) but NOT independently
+    /// ground-truth-validated - stays Tier B (OuraDriver gates it behind allowTierB; OuraStreamMapping
+    /// never folds it into scoring). Returns nil on an empty body (never guesses a state with no data).
+    public static func decodeActivityInfo(_ rec: OuraRecord) -> OuraActivityInfo? {
+        let b = rec.payload
+        guard let state = b.first else { return nil }
+        let met: [Double] = b.dropFirst().map { byte in
+            let raw = byte < 0x80 ? Double(byte) * 0.1 : 12.8 + (Double(byte) - 128.0) * 0.2
+            return (raw * 100).rounded() / 100
+        }
+        return OuraActivityInfo(ringTimestamp: rec.ringTimestamp, state: Int(state), met: met)
+    }
 }
 
 // MARK: - Bit reader (MSB-first), used by the bit-packed decoders (0x60)

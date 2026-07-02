@@ -123,6 +123,7 @@ final class OuraStreamMappingTests: XCTestCase {
             .timeSync(OuraTimeSync(ringTimestamp: 100, epochMs: 1_750_000_000_000, tzOffsetSeconds: 0)),
             .rtcBeacon(OuraRtcBeacon(ringTimestamp: 100, unixSeconds: 1_750_000_000)),
             .debugText(ringTimestamp: 100, text: "console"),
+            .activityInfo(OuraActivityInfo(ringTimestamp: 100, state: 0x41, met: [1.8, 1.9])),
         ], at: ts)
         XCTAssertTrue(s.isEmpty, "Tier-B and diagnostic events must not produce any durable stream row")
     }

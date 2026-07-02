@@ -344,7 +344,13 @@ public final class OuraDriver {
         case .sleepSummary1, .sleepSummaryB, .sleepSummaryC, .sleepSummaryD, .sleepSummaryE, .sleepSummaryF:
             return [.tierB(OuraTierBSummary(tag: record.type, ringTimestamp: record.ringTimestamp,
                                             rawPayload: record.payload, kind: "sleep_summary"))]
-        case .activityInfo, .activitySummary1, .activitySummary2:
+        case .activityInfo:
+            // Split out from the generic raw-bytes .tierB wrapper: we have a plausible (third-party,
+            // unverified) formula for THIS tag specifically (Decoders.decodeActivityInfo). Still Tier B -
+            // gated behind allowTierB above, and OuraStreamMapping never folds .activityInfo into Streams.
+            guard let info = OuraDecoders.decodeActivityInfo(record) else { return [] }
+            return [.activityInfo(info)]
+        case .activitySummary1, .activitySummary2:
             return [.tierB(OuraTierBSummary(tag: record.type, ringTimestamp: record.ringTimestamp,
                                             rawPayload: record.payload, kind: "activity"))]
         case .realSteps1, .realSteps2:

@@ -142,6 +142,11 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Drained with an honest wall-clock fallback at teardown if no anchor ever arrived this session
     /// (never silently dropped). Reset on stop/disconnect.
     private var pendingAnchorEvents: [(event: OuraEvent, ringTimestamp: UInt32)] = []
+    /// Tier-B (UNVERIFIED) kinds ("activity", "real_steps", "sleep_summary", "spo2_smoothed") already
+    /// logged this session, so a repeated tag logs once per KIND, not once per record. Investigation only
+    /// - see the `allowTierB: true` comment at driver construction; never feeds scoring. Reset on
+    /// stop/disconnect.
+    private var loggedTierBKinds: Set<String> = []
     /// True once the live-HR stream has been requested, so the disconnect handler can tell "we never got
     /// authenticated/streaming" (-> honest note) from "the link just dropped".
     private var reachedStreaming = false
@@ -381,6 +386,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         loggedFirstTemp = false
         loggedFirstSpo2 = false
         loggedAnchor = false
+        loggedTierBKinds.removeAll()
         reachedStreaming = false
         pendingInstallKey = nil
         adoptPhase = .idle
@@ -621,8 +627,28 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 // retroactively the moment an anchor lands.
                 drainPendingAnchorEvents()
 
+            case .tierB(let summary):
+                // INVESTIGATION ONLY (real_steps/sleep-summary/smoothed-SpO2/activity-summary, s7.3 Tier
+                // B). Logged once per kind (not per record) so we can see whether the ring sends these
+                // tags at all and inspect the raw bytes - never persisted, never scored (OuraStreamMapping
+                // drops .tierB unconditionally regardless of this log).
+                if !loggedTierBKinds.contains(summary.kind) {
+                    loggedTierBKinds.insert(summary.kind)
+                    let hex = summary.rawPayload.map { String(format: "%02x", $0) }.joined(separator: " ")
+                    log("Oura: Tier-B \(summary.kind) seen (tag 0x\(String(summary.tag, radix: 16))) - raw: \(hex)")
+                }
+
+            case .activityInfo(let info):
+                // INVESTIGATION ONLY (0x50, Tier B - see OuraActivityInfo doc: a plausible third-party
+                // formula, not independently ground-truth-validated). Logged with the DECODED state/MET
+                // values (not raw hex) since we do have a formula for this one tag - never persisted,
+                // never scored (OuraStreamMapping drops .activityInfo unconditionally regardless of this
+                // log). Logged every time (not gated to "first only"): unlike the other Tier-B kinds this
+                // is the one we're actively evaluating for plausibility across sessions.
+                log("Oura: activity (Tier-B) state=\(info.state) met=\(info.met)")
+
             default:
-                break   // motion / state / rtcBeacon / debugText / tierB: not a durable Streams row (see OuraStreamMapping)
+                break   // motion / state / rtcBeacon / debugText: not a durable Streams row (see OuraStreamMapping)
             }
         }
     }
@@ -757,8 +783,14 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         // driver's `allowKeyInstall` is gated on this connection's adopt consent ONLY: with no consent the
         // dangerous `0x24` installKey can never be sequenced, so a read-only / Advanced-key connect stays
         // honest (it announces needs-pairing instead of provisioning). Per OURA_PROTOCOL.md s3.2.
+        // allowTierB: true - INVESTIGATION ONLY (activity/steps/sleep-summary/smoothed-SpO2 tags, s7.3
+        // Tier B, UNVERIFIED layouts). This surfaces the raw bytes for logging so we can see whether the
+        // ring even sends these tags and what they look like; OuraStreamMapping unconditionally drops
+        // .tierB events regardless of this flag, so turning it on can never let an unverified value reach
+        // scoring (the Tier discipline gate that matters is there, not here).
         driver = OuraDriver(ringGen: ringGen,
                             authKey: authKey().map { [UInt8]($0) },
+                            allowTierB: true,
                             allowKeyInstall: adoptIntent)
         reachedStreaming = false
         loggedFirstHR = false
@@ -766,6 +798,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         loggedFirstSpo2 = false
         loggedAnchor = false
         pendingAnchorEvents.removeAll()   // a fresh session must never replay a stale-anchor guess
+        loggedTierBKinds.removeAll()
         pendingInstallKey = nil
         adoptPhase = .idle
         reassembler.reset()
@@ -811,6 +844,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         loggedFirstTemp = false
         loggedFirstSpo2 = false
         loggedAnchor = false
+        loggedTierBKinds.removeAll()
         reachedStreaming = false
         pendingInstallKey = nil
         // A disconnect MID-install is an honest failure (no ack came); a disconnect after streaming leaves

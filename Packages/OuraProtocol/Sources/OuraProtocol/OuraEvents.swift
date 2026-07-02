@@ -153,11 +153,27 @@ public struct OuraTierBSummary: Equatable, Sendable, Codable {
     }
 }
 
+/// One decoded `0x50` activity_info sample: a `state` code (activity-category; meaning unconfirmed) plus
+/// a per-sample MET (metabolic equivalent) series. THIRD-PARTY FORMULA (cited OURA_PROTOCOL.md s6.13,
+/// [oura-rs]) - plausible against 3 real Gen 3 captures (all 21 decoded values landed in a sane
+/// 1.3-3.3 sedentary/light-activity MET range, nothing negative or absurd) but NOT independently
+/// ground-truth-validated (no known Oura-app MET/step comparison run yet). Stays Tier B for that reason:
+/// gated behind `OuraDriver.allowTierB` and NEVER folded into `OuraStreamMapping`/`Streams`/scoring.
+public struct OuraActivityInfo: Equatable, Sendable, Codable {
+    public let ringTimestamp: UInt32
+    public let state: Int
+    public let met: [Double]
+    public init(ringTimestamp: UInt32, state: Int, met: [Double]) {
+        self.ringTimestamp = ringTimestamp; self.state = state; self.met = met
+    }
+}
+
 // MARK: - The emitted event union
 
 /// What OuraDriver.ingest(record:) emits. A single record can yield several events (e.g. an IBI+amp
-/// record carries up to 6 IBIs). Tier-B events are wrapped in .tierB and only emitted when the driver
-/// is configured to allow them; they must never feed scoring without passing a real-capture fixture.
+/// record carries up to 6 IBIs). Tier-B events are wrapped in .tierB (or .activityInfo) and only emitted
+/// when the driver is configured to allow them; they must never feed scoring without passing a
+/// real-capture fixture.
 public enum OuraEvent: Equatable, Sendable {
     case hr(OuraHR)
     case ibi(OuraIBI)
@@ -174,10 +190,17 @@ public enum OuraEvent: Equatable, Sendable {
     /// A Tier-B (UNVERIFIED) decoded value. Gated behind OuraDriver.allowTierB. Per the brief's TIER
     /// DISCIPLINE: do not let Tier B feed values silently.
     case tierB(OuraTierBSummary)
+    /// A decoded `0x50` activity_info sample (state + MET series). Also Tier-B (see `OuraActivityInfo`
+    /// doc) - split out from the generic `.tierB` raw-bytes wrapper because we DO have a plausible
+    /// decode formula for this one tag, so callers that want to log/inspect real MET numbers (rather than
+    /// raw hex) can. Still gated behind `allowTierB`, still never reaches `OuraStreamMapping`.
+    case activityInfo(OuraActivityInfo)
 
     /// True for Tier-B events, so a consumer can assert none leaked into a Tier-A-only sink.
     public var isTierB: Bool {
-        if case .tierB = self { return true }
-        return false
+        switch self {
+        case .tierB, .activityInfo: return true
+        default: return false
+        }
     }
 }
