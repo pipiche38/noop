@@ -93,6 +93,24 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// OURA_PROTOCOL.md s3.2. This is the install-ack the adopt key-install awaits.
     private static let setAuthKeyRespOp: UInt8 = 0x25
 
+    /// Local-time formatter for logging a decoded date/time next to a raw ring-tick cursor value, so a
+    /// number like "1178203" reads as an actual date instead of an opaque tick count.
+    private static let cursorDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+
+    /// Decode a ring-tick cursor value to a human-readable local date/time via the driver's current
+    /// session anchor (s5.5), or "no anchor yet" when none has arrived yet this session (honest: never
+    /// guesses a time). Investigation/logging only.
+    private func describeCursor(_ cursor: UInt32) -> String {
+        guard let driver, let seconds = driver.unixSeconds(forRingTimestamp: cursor) else {
+            return "no anchor yet"
+        }
+        return Self.cursorDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(seconds)))
+    }
+
     // MARK: - Dependencies (injected - no BLEManager / WhoopBleClient reference)
 
     private let live: LiveState
@@ -222,7 +240,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// both right after reaching `.streaming` and from the periodic timer).
     private func fetchHistoryIfIdle() {
         guard let driver, driver.phase == .streaming else { return }
-        log("Oura: fetching history from cursor \(historyCursor)")
+        log("Oura: fetching history from cursor \(historyCursor) (\(describeCursor(historyCursor)))")
         advance(.startHistoryFetch(cursor: historyCursor))
     }
 
@@ -242,10 +260,38 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Handle a `0x11` GetEvents response (OURA_PROTOCOL.md s5.2): persist the advanced cursor (so a LATER
     /// connection resumes rather than re-fetching everything) and drive the driver's cursor-loop state
     /// machine, which asks for another ack-fetch while `moreData` or returns to `.streaming` once caught up.
+    ///
+    /// BUG FIX (live Gen 3 test, 2026-07-02): the ring's terminal "no more data" response (moreData=false,
+    /// status 0x00) zero-fills the cursor field - confirmed by comparing raw bytes: a mid-fetch response
+    /// (moreData=true) carried a real, advancing nonzero cursor (e.g. 1,164,917 ticks, then 1,168,079
+    /// ticks a few minutes later on the next connection - a plausible elapsed-time delta), while every
+    /// terminal response was all-zero. Persisting THAT zero (as this used to do unconditionally) reset the
+    /// cursor to 0 on every single fetch, forcing a full backlog re-fetch every 15 minutes indefinitely -
+    /// looked like "this ring never advances its cursor" but was actually us discarding real progress.
+    /// Only trust/persist the cursor when the response is actually carrying new data.
+    ///
+    /// REGRESSION FIX (live Gen 3 test, 2026-07-02): a cursor persisted from one BLE connection was
+    /// observed SMALLER on the very next connection's first real cursor (1,172,522 -> 414,158) despite no
+    /// time travel - `ringTimestamp = (session << 16) | counter` (OURA_PROTOCOL.md s2.3), and the ring's
+    /// internal `session` component appears to shift across reconnects/restarts. OURA_PROTOCOL.md s5.5
+    /// already documents this exact class of problem for the UTC anchor ("ring-start with rt regression
+    /// -> invalidate anchor"); the same reasoning applies here. Resuming from a cursor whose session no
+    /// longer matches the ring's current one is not a real "resume" - empirically it just made the ring
+    /// re-dump its whole backlog anyway, so there is no efficiency lost by detecting this and resetting
+    /// to an honest, explicit 0 rather than silently feeding the ring a now-meaningless reference.
     private func handleHistorySummary(_ summary: (cursor: UInt32, moreData: Bool)) {
-        historyCursor = summary.cursor
-        OuraHistoryCursorStore.save(summary.cursor, deviceId: deviceId)
-        if !summary.moreData { log("Oura: history fetch caught up (cursor \(summary.cursor))") }
+        if summary.moreData {
+            if summary.cursor < historyCursor {
+                log("Oura: ring-time regression detected (fetch cursor \(summary.cursor) [\(describeCursor(summary.cursor))] < persisted \(historyCursor) [\(describeCursor(historyCursor))]) - the ring's session likely reset; resetting our cursor to 0")
+                historyCursor = 0
+                OuraHistoryCursorStore.save(0, deviceId: deviceId)
+            } else {
+                historyCursor = summary.cursor
+                OuraHistoryCursorStore.save(summary.cursor, deviceId: deviceId)
+            }
+        } else {
+            log("Oura: history fetch caught up (cursor \(historyCursor) [\(describeCursor(historyCursor))])")
+        }
         advance(.historyCursorAdvanced(cursor: summary.cursor, moreData: summary.moreData))
     }
 
@@ -947,9 +993,16 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
         // the event-tag range (tags are >= 0x41), so it round-trips safely through the TLV decoder as an
         // "unknown tag" no-op with correct byte accounting (both framings share the same op/len/body wire
         // shape, so the byte count consumed is identical either way).
-        if let summaryFrame = frames.first(where: { $0.op == OuraFraming.getEventsResponseOp }),
-           let summary = OuraFraming.parseGetEventsResponse(summaryFrame.body) {
-            handleHistorySummary(summary)
+        if let summaryFrame = frames.first(where: { $0.op == OuraFraming.getEventsResponseOp }) {
+            // TEMP DIAGNOSTIC (2026-07-02): the cursor has reported 0 on every fetch on this ring, even
+            // after pulling a full day of records. Log the RAW body so we can confirm the s5.2 layout
+            // (status:1 sub_status:1 last_ring_timestamp:4LE pad:2) is actually right, rather than
+            // assuming it - the same kind of unverified citation was wrong for the 0x42 time-sync field.
+            let hex = summaryFrame.body.map { String(format: "%02x", $0) }.joined(separator: " ")
+            log("Oura: GetEvents summary raw body (\(summaryFrame.body.count)B) - \(hex)")
+            if let summary = OuraFraming.parseGetEventsResponse(summaryFrame.body) {
+                handleHistorySummary(summary)
+            }
         }
         if frames.contains(where: { $0.op == OuraFraming.secureSessionOp }) {
             for frame in frames where frame.op == OuraFraming.secureSessionOp {
