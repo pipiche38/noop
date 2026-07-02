@@ -67,6 +67,14 @@ public final class OuraDriver {
     /// The most recent ring time seen on any record, used to stamp live-HR pushes (which are not TLV
     /// records and carry no timestamp of their own).
     private var lastRingTimestamp: UInt32 = 0
+    /// Ring-time -> UTC anchor (OURA_PROTOCOL.md s5.5): the ring's clock ticks at 100 ms/tick by default
+    /// (burst-mode 1 ms/tick, s5.5, is NOT modeled in v1). Set from the ring's own 0x42 time-sync event
+    /// (primary) or, only while no 0x42 has arrived yet THIS session, the coarser 1s-granularity 0x85 RTC
+    /// beacon (secondary). nil until the first anchor event of this session: a record decoded before then
+    /// has no computable UTC time, and `unixSeconds(forRingTimestamp:)` honestly returns nil rather than
+    /// guessing (a stale anchor from a PREVIOUS session is never reused - the ring may have rebooted).
+    private var anchorUtcMs: Int64?
+    private var anchorRingTime: UInt32?
     /// The freshly-provisioned key the transport generated during an adopt flow (s3.2). Once set by
     /// beginKeyInstall it becomes the effective key for the post-install re-auth. nil otherwise.
     private var installedKey: [UInt8]?
@@ -198,6 +206,32 @@ public final class OuraDriver {
         liveHREnableStep = 0
         lastRingTimestamp = 0
         installedKey = nil
+        anchorUtcMs = nil
+        anchorRingTime = nil
+    }
+
+    /// Convert a record's ring-clock timestamp to unix seconds using the current session's anchor
+    /// (OURA_PROTOCOL.md s5.5). Returns nil when no anchor has arrived yet this session, so the caller
+    /// can honestly fall back (e.g. to wall-clock arrival time) instead of guessing.
+    public func unixSeconds(forRingTimestamp rt: UInt32) -> Int? {
+        guard let anchorUtcMs, let anchorRingTime else { return nil }
+        let deltaTicks = Int64(rt) - Int64(anchorRingTime)
+        let ms = anchorUtcMs + deltaTicks * 100
+        guard ms > 0 else { return nil }
+        return Int(ms / 1000)
+    }
+
+    /// Bounds for a plausible anchor epoch (unix seconds): 2020-01-01 to 2035-01-01. A decoded 0x42/0x85
+    /// value outside this range is a corrupt/misaligned record (seen live: a full cursor=0 history dump
+    /// hit one deep in the backlog) - never trusted as an anchor, honest-data invariant. This ALSO bounds
+    /// the input to the `* 1000` ms conversion so it can never overflow Int64 (a real crash on a real Gen
+    /// 3 ring, 2026-07-02, before this gate existed).
+    private static let minPlausibleEpochSeconds: Int64 = 1_577_836_800
+    private static let maxPlausibleEpochSeconds: Int64 = 2_051_222_400
+
+    private static func plausibleAnchorMs(fromEpochSeconds seconds: Int64) -> Int64? {
+        guard seconds >= minPlausibleEpochSeconds, seconds <= maxPlausibleEpochSeconds else { return nil }
+        return seconds * 1000   // safe: bounded input, cannot overflow
     }
 
     // MARK: - Record ingest (decode)
@@ -264,11 +298,34 @@ public final class OuraDriver {
 
         // --- Tier A: Lifecycle / state / time ---
         case .timeSync:
-            if let ts = OuraDecoders.decodeTimeSync(record) { return [.timeSync(ts)] }
-            return []
+            // Primary UTC anchor (s5.5): always wins over a secondary RTC-beacon anchor already set.
+            guard let ts = OuraDecoders.decodeTimeSync(record) else { return [] }
+            // EMPIRICAL CORRECTION (Gen 3, real-ring test, 2026-07-02): OURA_PROTOCOL.md s6.11 (cited only
+            // to unverified RE write-ups, never fixture-gated) claims this field is epoch MILLISECONDS.
+            // Live-testing a real Gen 3 ring proved otherwise: treating the raw wire value as ms anchored
+            // every history-fetched sample to ~Jan 1970 (~1000x too early). The wire value is unix
+            // SECONDS; convert via `plausibleAnchorMs` (not in the decoder, which stays a faithful
+            // byte-level parse of the documented layout - `OuraTimeSync.epochMs` still names what the doc
+            // claims the field is).
+            // CRASH FIX (live Gen 3 test, 2026-07-02): a full cursor=0 history dump hit a 0x42 record with
+            // an implausible raw value (likely a misaligned/corrupt record deep in the backlog) that
+            // overflowed Int64 on the naive `* 1000` and crashed the app. `plausibleAnchorMs` bounds-checks
+            // BEFORE multiplying, so an implausible value is safely ignored (honest: never anchors to a
+            // garbage time) instead of trapping.
+            if let ms = Self.plausibleAnchorMs(fromEpochSeconds: ts.epochMs) {
+                anchorUtcMs = ms
+                anchorRingTime = ts.ringTimestamp
+            }
+            return [.timeSync(ts)]
         case .rtcBeacon:
-            if let r = OuraDecoders.decodeRtcBeacon(record) { return [.rtcBeacon(r)] }
-            return []
+            // Secondary UTC anchor (s5.5, 1s granularity): only fills in while no 0x42 anchor exists yet
+            // this session, so a coarser beacon never overrides the primary time-sync anchor.
+            guard let r = OuraDecoders.decodeRtcBeacon(record) else { return [] }
+            if anchorUtcMs == nil, let ms = Self.plausibleAnchorMs(fromEpochSeconds: Int64(r.unixSeconds)) {
+                anchorUtcMs = ms
+                anchorRingTime = r.ringTimestamp
+            }
+            return [.rtcBeacon(r)]
         case .stateChange, .wearEvent:
             if let s = OuraDecoders.decodeState(record) { return [.state(s)] }
             return []
