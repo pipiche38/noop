@@ -152,6 +152,18 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private var loggedFirstTemp = false
     /// Logs the FIRST SpO2 sample decoded this session only. Twin of `loggedFirstTemp`.
     private var loggedFirstSpo2 = false
+    /// Logs the FIRST HRV sample decoded this session only. Twin of `loggedFirstTemp`.
+    private var loggedFirstHRV = false
+    /// Logs the FIRST sleep-phase sample decoded this session only. Twin of `loggedFirstTemp`.
+    private var loggedFirstSleepPhase = false
+    /// Counts of each history-fetched signal decoded this session, so the "history fetch caught up" log
+    /// line (see `handleHistorySummary`) gives an at-a-glance overnight summary - e.g. "0 SpO2" tells you
+    /// immediately the ring banked nothing, without scrolling back through every raw per-sample line.
+    /// Reset alongside the loggedFirst* flags on connect/stop/disconnect.
+    private var sessionTempCount = 0
+    private var sessionSpo2Count = 0
+    private var sessionHRVCount = 0
+    private var sessionSleepPhaseCount = 0
     /// Logs the FIRST ring-time -> UTC anchor of this session only (s5.5); reset on stop/disconnect.
     private var loggedAnchor = false
     /// History-fetched events decoded BEFORE a ring-time -> UTC anchor exists this session, held here
@@ -287,7 +299,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 OuraHistoryCursorStore.save(summary.cursor, deviceId: deviceId)
             }
         } else {
-            log("Oura: history fetch caught up (cursor \(historyCursor) [\(describeCursor(historyCursor))])")
+            log("Oura: history fetch caught up (cursor \(historyCursor) [\(describeCursor(historyCursor))]) - this session so far: \(sessionTempCount) temp, \(sessionSpo2Count) SpO2, \(sessionHRVCount) HRV, \(sessionSleepPhaseCount) sleep-phase samples")
         }
         advance(.historyCursorAdvanced(cursor: summary.cursor, moreData: summary.moreData))
     }
@@ -428,7 +440,13 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         loggedFirstHR = false
         loggedFirstTemp = false
         loggedFirstSpo2 = false
+        loggedFirstHRV = false
+        loggedFirstSleepPhase = false
         loggedAnchor = false
+        sessionTempCount = 0
+        sessionSpo2Count = 0
+        sessionHRVCount = 0
+        sessionSleepPhaseCount = 0
         reachedStreaming = false
         pendingInstallKey = nil
         adoptPhase = .idle
@@ -624,6 +642,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
 
             case .temp(let t):
                 guard t.celsius >= 20, t.celsius <= 45 else { continue }   // physiological gate (wrist skin temp)
+                sessionTempCount += 1
                 if !loggedFirstTemp {
                     loggedFirstTemp = true
                     log("Oura: first skin temp decoded (last night) - \(String(format: "%.2f", t.celsius))°C")
@@ -635,6 +654,17 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 }
 
             case .spo2(let s):
+                // Plausibility gate (added 2026-07-02 review), twin of the .hr/.temp gates above. 0x6F's
+                // "raw" is a direct ~0-100 percentage byte; 0x7B's "raw" is apparently a coarser scale (a
+                // real capture decoded 970, i.e. ~97.0%) - both share the SAME "raw" unit tag despite the
+                // scale difference, so a tight 0...100 gate would wrongly reject a legitimate 0x7B reading.
+                // 0...1000 is generous enough to admit both real shapes while still rejecting an obviously
+                // corrupt/misframed record (0x7B's u16 can otherwise read up to 65535). "dc_raw" (0x77) is
+                // an explicitly signed delta-coded reconstruction, not a percentage, so it is left ungated.
+                if s.unit == "raw" {
+                    guard (0...1000).contains(s.value) else { continue }
+                }
+                sessionSpo2Count += 1
                 if !loggedFirstSpo2 {
                     loggedFirstSpo2 = true
                     log("Oura: first SpO2 decoded (last night) - value \(s.value) (\(s.unit))")
@@ -652,6 +682,11 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 }
 
             case .hrv(let v):
+                sessionHRVCount += 1
+                if !loggedFirstHRV {
+                    loggedFirstHRV = true
+                    log("Oura: first HRV decoded (last night) - timeMs=\(v.timeMs) b1=\(v.b1) b2=\(v.b2)")
+                }
                 if let ts = driver.unixSeconds(forRingTimestamp: v.ringTimestamp) {
                     enqueue([e], ts: ts)
                 } else {
@@ -659,6 +694,11 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 }
 
             case .sleepPhase(let v):
+                sessionSleepPhaseCount += 1
+                if !loggedFirstSleepPhase {
+                    loggedFirstSleepPhase = true
+                    log("Oura: first sleep phase decoded (last night) - stage=\(v.stage)")
+                }
                 if let ts = driver.unixSeconds(forRingTimestamp: v.ringTimestamp) {
                     enqueue([e], ts: ts)
                 } else {
@@ -806,6 +846,11 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         log("Oura: connected - discovering services")
+        #if DEBUG
+        if let url = OuraRawCaptureStore.fileURL(deviceId: deviceId) {
+            log("Oura: DEBUG raw capture -> \(url.path)")
+        }
+        #endif
         failedReconnectAttempts = 0   // a real connection clears the reconnect backoff (#912)
         peripheral.delegate = self
         // Fresh driver per connection so a new session re-runs auth (the app key is session-scoped). The
@@ -819,7 +864,13 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         loggedFirstHR = false
         loggedFirstTemp = false
         loggedFirstSpo2 = false
+        loggedFirstHRV = false
+        loggedFirstSleepPhase = false
         loggedAnchor = false
+        sessionTempCount = 0
+        sessionSpo2Count = 0
+        sessionHRVCount = 0
+        sessionSleepPhaseCount = 0
         pendingAnchorEvents.removeAll()   // a fresh session must never replay a stale-anchor guess
         pendingInstallKey = nil
         adoptPhase = .idle
@@ -865,7 +916,13 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         loggedFirstHR = false
         loggedFirstTemp = false
         loggedFirstSpo2 = false
+        loggedFirstHRV = false
+        loggedFirstSleepPhase = false
         loggedAnchor = false
+        sessionTempCount = 0
+        sessionSpo2Count = 0
+        sessionHRVCount = 0
+        sessionSleepPhaseCount = 0
         reachedStreaming = false
         pendingInstallKey = nil
         // A disconnect MID-install is an honest failure (no ack came); a disconnect after streaming leaves
@@ -977,6 +1034,16 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
             log("Oura: GetEvents summary raw body (\(summaryFrame.body.count)B) - \(hex)")
             if let summary = OuraFraming.parseGetEventsResponse(summaryFrame.body) {
                 handleHistorySummary(summary)
+            } else {
+                // STALL FIX (2026-07-02 review): a body too short to parse used to be silently ignored,
+                // which left `driver.phase` stuck at `.fetchingHistory` forever - `fetchHistoryIfIdle()`'s
+                // `guard driver.phase == .streaming` then silently blocked EVERY subsequent periodic
+                // re-fetch for the rest of the connection, with no signal beyond the absence of future
+                // "caught up" lines. Recover the phase without touching the persisted cursor (we don't
+                // know the real one), so a single bad response degrades gracefully instead of quietly
+                // ending history collection for the rest of an unattended overnight session.
+                log("Oura: WARNING GetEvents summary body too short to parse (\(summaryFrame.body.count)B) - recovering to streaming without advancing the cursor")
+                advance(.historyCursorAdvanced(cursor: historyCursor, moreData: false))
             }
         }
         if frames.contains(where: { $0.op == OuraFraming.secureSessionOp }) {
@@ -989,12 +1056,25 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
             let tlvBytes = frames.filter { $0.op != OuraFraming.secureSessionOp && $0.op != Self.setAuthKeyRespOp }
                                  .flatMap { [$0.op, UInt8($0.body.count)] + $0.body }
             if !tlvBytes.isEmpty {
-                ingest(driver.ingest(notification: tlvBytes, reassembler: reassembler))
+                ingestTLV(tlvBytes)
             }
             return
         }
         // No secure frame in this notification: treat the whole value as TLV record bytes.
-        ingest(driver.ingest(notification: bytes, reassembler: reassembler))
+        ingestTLV(bytes)
+    }
+
+    /// Feed raw TLV bytes to the reassembler, DEBUG-capture each complete record (see
+    /// `OuraRawCaptureStore`), then decode and ingest. Centralizes the feed -> capture -> decode sequence
+    /// so both `didUpdateValueFor` call sites above (a secure-frame notification with trailing records,
+    /// and a pure-TLV notification) capture identically rather than duplicating the reassembler call.
+    private func ingestTLV(_ bytes: [UInt8]) {
+        let records = reassembler.feed(bytes)
+        #if DEBUG
+        for rec in records { OuraRawCaptureStore.appendRecord(deviceId: deviceId, record: rec) }
+        #endif
+        guard let driver else { return }
+        ingest(records.flatMap { driver.ingest(record: $0) })
     }
 
     /// Act on what the driver resolved a 0x2F secure sub-frame to.
@@ -1099,3 +1179,61 @@ enum OuraHistoryCursorStore {
         UserDefaults.standard.set(Int(cursor), forKey: key(deviceId: deviceId))
     }
 }
+
+// MARK: - Oura raw record capture (DEBUG builds only)
+
+#if DEBUG
+/// Appends every complete TLV record this session decodes to a local JSONL file, so a real capture can be
+/// replayed offline later through the package's own `oura-decode` CLI - to build new decoder golden-test
+/// fixtures from ACTUAL ring bytes (instead of the hand-built synthetic ones in DecoderGoldenTests.swift),
+/// or to re-run a fixed/changed decoder against a night that already happened without needing the ring
+/// physically present again. This is exactly the kind of raw-wire data the protocol itself was originally
+/// reverse-engineered from.
+///
+/// Captures at the RECORD level (post-reassembly, post-outer-framing: `type len rt payload` per
+/// OURA_PROTOCOL.md s2.3), not the raw notification level, so each line is byte-for-byte the same `hex`
+/// format `oura-decode` and `DecoderGoldenTests.record(_:)` already expect (`{"hex","kind","ts_ms"}` -
+/// see `oura-decode`'s `CaptureRecord`). One JSON object per line (JSONL); wrap into an array first to
+/// feed `oura-decode` a file, e.g. `jq -s . <file>.jsonl > capture.json && oura-decode capture.json`.
+///
+/// DEBUG-only (compiled out of Release entirely): this is investigation tooling, not a user-facing
+/// feature, and raw ring record bytes are sensitive biometric wire data that must never be collected
+/// without the developer explicitly building a DEBUG binary to do so. Appends across sessions/reconnects
+/// into one growing per-ring file; the developer is responsible for deleting it (never pruned or
+/// uploaded automatically).
+enum OuraRawCaptureStore {
+    /// Where this ring's capture file lives, creating the containing directory if needed. nil only if the
+    /// sandbox somehow has no Application Support directory (never expected in practice).
+    static func fileURL(deviceId: String) -> URL? {
+        guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        let captureDir = dir.appendingPathComponent("NOOP/OuraRawCapture", isDirectory: true)
+        try? FileManager.default.createDirectory(at: captureDir, withIntermediateDirectories: true)
+        return captureDir.appendingPathComponent("\(deviceId).jsonl")
+    }
+
+    /// Append one decoded TLV record, re-serialized back to its exact wire bytes (`type len rt(4 LE)
+    /// payload`, per OURA_PROTOCOL.md s2.3), plus its tag and wall-clock arrival time. Best-effort: a
+    /// write failure is silently ignored, since this is a debug convenience that must never affect the
+    /// live decode/persist path even if disk access fails.
+    static func appendRecord(deviceId: String, record: OuraRecord) {
+        guard let url = fileURL(deviceId: deviceId) else { return }
+        let len = record.payload.count + 4   // rt(4) + payload, per s2.3's len byte semantics
+        guard len <= 0xFF else { return }    // the wire len byte can't represent more; never seen in practice
+        let rt = record.ringTimestamp
+        let wire: [UInt8] = [record.type, UInt8(len),
+                              UInt8(rt & 0xFF), UInt8((rt >> 8) & 0xFF), UInt8((rt >> 16) & 0xFF), UInt8((rt >> 24) & 0xFF)]
+                             + record.payload
+        let hex = wire.map { String(format: "%02x", $0) }.joined()
+        let kind = String(format: "0x%02x", record.type)
+        let tsMs = Int(Date().timeIntervalSince1970 * 1000)
+        guard let line = "{\"hex\":\"\(hex)\",\"kind\":\"\(kind)\",\"ts_ms\":\(tsMs)}\n".data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(line)
+            try? handle.close()
+        } else {
+            try? line.write(to: url)
+        }
+    }
+}
+#endif
