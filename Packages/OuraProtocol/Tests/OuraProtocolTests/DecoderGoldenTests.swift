@@ -71,15 +71,16 @@ final class DecoderGoldenTests: XCTestCase {
         XCTAssertEqual(hrv, [OuraHRV(ringTimestamp: rt, timeMs: 5000, b1: 10, b2: -5)])
     }
 
-    // MARK: - 0x6F SpO2 per-sample (base from high nibble << 7, then u8, 0xFF terminator)
+    // MARK: - 0x6F SpO2 per-sample (samples are DIRECT percentages, base is a separate/discarded field)
 
     func testSpO2PerSample0x6F() {
-        // header high nibble 1 -> base 128 ; samples 95,96 ; FF terminator.
+        // header high nibble 1 (base field, intentionally discarded - see decodeSpO2PerSample's BUG FIX
+        // note); samples 95,96 (direct SpO2 percentages); FF terminator.
         let rec = record("6f0802000100105f60ff")
         let s = OuraDecoders.decodeSpO2PerSample(rec)
         XCTAssertEqual(s, [
-            OuraSpO2(ringTimestamp: rt, value: 223),
-            OuraSpO2(ringTimestamp: rt, value: 224),
+            OuraSpO2(ringTimestamp: rt, value: 95),
+            OuraSpO2(ringTimestamp: rt, value: 96),
         ])
     }
 

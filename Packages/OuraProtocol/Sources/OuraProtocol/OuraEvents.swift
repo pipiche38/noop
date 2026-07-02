@@ -44,12 +44,23 @@ public struct OuraHRV: Equatable, Sendable, Codable {
 }
 
 /// One decoded SpO2 sample. `value` is the raw SpO2 reading; `unit` documents its scale.
-public struct OuraSpO2: Equatable, Sendable, Codable {
+public struct OuraSpO2: Sendable, Codable {
     public let ringTimestamp: UInt32
     public let value: Int
     public let unit: String
-    public init(ringTimestamp: UInt32, value: Int, unit: String = "raw") {
-        self.ringTimestamp = ringTimestamp; self.value = value; self.unit = unit
+    /// Raw payload bytes behind this decoded value. INVESTIGATION ONLY (2026-07-02): comparing this
+    /// codebase's existing decode formula against an alternative from another RE source; not part of the
+    /// durable Streams row (OuraStreamMapping never reads it) and deliberately excluded from `==` below
+    /// so it can't silently break existing equality-based tests/fixtures that predate this field.
+    public let rawPayload: [UInt8]
+    public init(ringTimestamp: UInt32, value: Int, unit: String = "raw", rawPayload: [UInt8] = []) {
+        self.ringTimestamp = ringTimestamp; self.value = value; self.unit = unit; self.rawPayload = rawPayload
+    }
+}
+
+extension OuraSpO2: Equatable {
+    public static func == (lhs: OuraSpO2, rhs: OuraSpO2) -> Bool {
+        lhs.ringTimestamp == rhs.ringTimestamp && lhs.value == rhs.value && lhs.unit == rhs.unit
     }
 }
 

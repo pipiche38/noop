@@ -639,6 +639,12 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                     loggedFirstSpo2 = true
                     log("Oura: first SpO2 decoded (last night) - value \(s.value) (\(s.unit))")
                 }
+                // INVESTIGATION ONLY (2026-07-02): raw bytes on EVERY sample (not just first), to compare
+                // this decoder's formula against an alternative from another RE source - see
+                // OuraSpO2.rawPayload doc. Payload length alone roughly tells 0x6F (variable-length runs)
+                // from 0x7B (fixed 2 bytes).
+                let spo2Hex = s.rawPayload.map { String(format: "%02x", $0) }.joined(separator: " ")
+                log("Oura: SpO2 raw payload (\(s.rawPayload.count)B, decoded value \(s.value)) - \(spo2Hex)")
                 if let ts = driver.unixSeconds(forRingTimestamp: s.ringTimestamp) {
                     enqueue([e], ts: ts)
                 } else {

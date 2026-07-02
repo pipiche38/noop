@@ -158,16 +158,24 @@ public enum OuraDecoders {
     /// Decode the 0x6F spo2_event: byte6 bits [7:4]=SpO2 base (<<7), [3:0]=status flag; then one
     /// uint8 SpO2 value per second from byte7 onward (optional 0xFF terminator). Per OURA_PROTOCOL.md
     /// s6.5. Returns nil on a short body.
+    ///
+    /// BUG FIX (2026-07-02): the `base` field and the per-second `samples[]` are TWO SEPARATE things,
+    /// per [ringverse]'s own EVENTS.md: "samples[] - one uint8 value per second - these are direct
+    /// percentage values, not derived through base-shifting operations." Previously this decoder ADDED
+    /// base to every sample, which is exactly what a real Gen 3 ring's captures looked like a bug: two
+    /// real captures decoded to 1298 and 1713 - absurd for a percentage, but consistent with a
+    /// plausible ~90-95% sample plus a nonzero `base` (high nibble << 7, up to 1920) being wrongly added
+    /// in. `base` is intentionally decoded and then discarded (not currently surfaced anywhere - its own
+    /// meaning is unconfirmed) rather than combined with the samples.
     public static func decodeSpO2PerSample(_ rec: OuraRecord) -> [OuraSpO2]? {
         let b = rec.payload
         guard b.count >= 2 else { return nil }
-        let base = (Int(b[0]) >> 4) << 7              // high nibble of byte6, scaled << 7
         var out: [OuraSpO2] = []
         var i = 1
         while i < b.count {
             let raw = Int(b[i])
             if raw == 0xFF { break }                  // terminator
-            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: base + raw))
+            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: raw, rawPayload: b))
             i += 1
         }
         return out.isEmpty ? nil : out
@@ -181,7 +189,7 @@ public enum OuraDecoders {
         let b = rec.payload
         guard b.count >= 2 else { return nil }
         let value = u16be(b, 0)                       // BIG-endian footgun
-        return OuraSpO2(ringTimestamp: rec.ringTimestamp, value: value)
+        return OuraSpO2(ringTimestamp: rec.ringTimestamp, value: value, rawPayload: b)
     }
 
     // MARK: - SpO2 DC, sign-magnitude deltas (0x77; s6.7)
@@ -204,13 +212,13 @@ public enum OuraDecoders {
         }
         var out: [OuraSpO2] = []
         if hasBase {
-            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: acc, unit: "dc_raw"))
+            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: acc, unit: "dc_raw", rawPayload: b))
         }
         while i < b.count {
             let v = Int(Int8(bitPattern: b[i]))
             let mag = abs(v) << scale
             acc += (v < 0) ? -mag : mag
-            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: acc, unit: "dc_raw"))
+            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: acc, unit: "dc_raw", rawPayload: b))
             i += 1
         }
         return out.isEmpty ? nil : out
