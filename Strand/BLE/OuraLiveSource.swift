@@ -36,7 +36,8 @@ import OuraProtocol
 ///   4. On auth success, run the gen-appropriate live-HR enable triplet; HR/IBI then streams as 0x2F
 ///      sub-op 0x28 pushes which the driver decodes.
 ///   5. Decoded events map onto `Streams` via `OuraStreamMapping` and persist in 30/30s batches; live HR
-///      also feeds `LiveState`; battery feeds `onBattery`.
+///      also feeds `LiveState`; battery is requested once streaming starts (`GetBattery`, 0x0C -> 0x0D)
+///      and feeds `onBattery`/`batteryPct`.
 @MainActor
 public final class OuraLiveSource: NSObject, ObservableObject {
 
@@ -354,6 +355,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 if feedsLive { live.streamingLiveHR = true }   // drive the green menu-bar STREAMING pill (no WHOOP bond)
                 log("Oura: live-HR enabled - streaming HR / IBI")
                 startReengageTimer()
+                write([OuraCommands.getBattery()])
             }
         default:
             break
@@ -739,6 +741,14 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
            let ackFrame = frames.first(where: { $0.op == Self.setAuthKeyRespOp }) {
             handleKeyInstallAck(status: ackFrame.body.first ?? 0xFF)
             return
+        }
+        // The `0x0D` GetBattery response is ALSO an outer frame (never a TLV record, s6.10), detected the
+        // same non-destructive way as other outer-frame ops: below the event-tag range (>= 0x41), so it
+        // round-trips safely through the TLV decoder as an "unknown tag" no-op if left unfiltered.
+        // Routed through the existing `.battery` ingest path (batteryPct/onBattery/log side effects).
+        if let batteryFrame = frames.first(where: { $0.op == OuraFraming.batteryResponseOp }),
+           let battery = OuraDecoders.decodeBattery(batteryFrame.body) {
+            ingest([.battery(battery)])
         }
         if frames.contains(where: { $0.op == OuraFraming.secureSessionOp }) {
             for frame in frames where frame.op == OuraFraming.secureSessionOp {

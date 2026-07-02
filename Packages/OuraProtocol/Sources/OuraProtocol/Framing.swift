@@ -36,6 +36,10 @@ public struct OuraSecureFrame: Equatable, Sendable {
 public enum OuraFraming {
     /// The secure-session / extended opcode. Per OURA_PROTOCOL.md s2.2 / s4.1.
     public static let secureSessionOp: UInt8 = 0x2F
+    /// The GetBattery response outer opcode (OURA_PROTOCOL.md s4.1/s6.10). Below the event-tag range
+    /// (tags are >= 0x41), so it round-trips safely through the TLV decoder as an "unknown tag" no-op
+    /// if a caller fails to special-case it.
+    public static let batteryResponseOp: UInt8 = 0x0D
 
     /// Parse one outer frame from the front of `bytes`. Returns nil on a short buffer (header or body
     /// not fully present), so a caller can wait for more bytes. Per OURA_PROTOCOL.md s2.1.
