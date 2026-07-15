@@ -178,6 +178,13 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// ONLY (see the `allowTierB: true` comment at driver construction) - the log is how we collect raw
     /// captures to validate these layouts; nothing here ever persists or scores. Reset on stop/disconnect.
     private var loggedTierBKinds: Set<String> = []
+    /// Distinct 0x45/0x53 state_change strings (`code|text`) already logged this session. The ring emits
+    /// ~137 of these per drain, but only a handful of DISTINCT strings ("hr enable"/"fea off" feature
+    /// toggles, "chg. detected", "motion det", "timeout"); a wear/unwear transition should surface as a
+    /// NEW distinct string, so once-per-string logging captures it the moment it first appears with its
+    /// anchored time, without the per-toggle flood. INVESTIGATION only — a candidate Oura wear-status
+    /// source (NOOP's `worn` is WHOOP-only today); nothing is wired to `worn` until the vocabulary is known.
+    private var loggedOuraStates: Set<String> = []
 
     /// 0x71 green_ibi_amp fixture capture (upstream #287/#333): EVERY occurrence is logged with its
     /// anchored time + envelope rt + length + full raw bytes (a verified decoder needs several real
@@ -789,6 +796,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         loggedFirstSpo2 = false
         loggedAnchor = false
         loggedTierBKinds.removeAll()
+        loggedOuraStates.removeAll()
         greenIbiAmpCount = 0
         greenIbiAmpLengths.removeAll()
         lastSleepWindow049 = nil
@@ -1242,8 +1250,25 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                     lastActivitySampleCount = info.met.count
                 }
 
+            case .state(let s):
+                // INVESTIGATION ONLY (0x45/0x53 state_change_ind, s6.15): a state byte + optional ASCII
+                // text. open_oura reads it as a wear/feature state event; against our own capture the text
+                // is human-readable ("hr enable"/"fea off" feature toggles, "chg. detected", "motion det",
+                // "timeout"). A candidate source for an Oura WEAR status (NOOP's `worn` is WHOOP-only today).
+                // Logged ONCE PER DISTINCT string with its anchored time so a wear/unwear transition — which
+                // should appear as a NEW string — surfaces the moment it lands, without the ~137/drain
+                // per-toggle flood. Never persisted, never scored, never wired to `worn` until we know the
+                // vocabulary from a real take-off.
+                let key = "\(s.stateCode)|\(s.text ?? "")"
+                if !loggedOuraStates.contains(key) {
+                    loggedOuraStates.insert(key)
+                    let when = driver.unixSeconds(forRingTimestamp: s.ringTimestamp)
+                        .map { Self.cursorDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval($0))) } ?? "no anchor yet"
+                    log("Oura: state (Tier-B) [\(when)] code=\(s.stateCode) text=\(s.text.map { "\"\($0)\"" } ?? "-")")
+                }
+
             default:
-                break   // motion / state / debugText: not a durable Streams row (see OuraStreamMapping)
+                break   // motion / debugText: not a durable Streams row (see OuraStreamMapping)
             }
         }
     }
@@ -1397,6 +1422,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         loggedFirstSpo2 = false
         loggedAnchor = false
         loggedTierBKinds.removeAll()
+        loggedOuraStates.removeAll()
         greenIbiAmpCount = 0
         greenIbiAmpLengths.removeAll()
         lastSleepWindow049 = nil
@@ -1477,6 +1503,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         loggedFirstSpo2 = false
         loggedAnchor = false
         loggedTierBKinds.removeAll()
+        loggedOuraStates.removeAll()
         greenIbiAmpCount = 0
         greenIbiAmpLengths.removeAll()
         lastSleepWindow049 = nil
