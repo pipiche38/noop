@@ -1,6 +1,7 @@
 package com.noop.ui
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.noop.NoopApplication
@@ -38,6 +39,7 @@ import com.noop.data.WhoopRepository
 import com.noop.data.WorkoutRow
 import com.noop.ingest.ActivityFileImporter
 import com.noop.ingest.HealthConnectImporter
+import com.noop.ble.WhoopBleClient
 import com.noop.ingest.HealthConnectWriter
 import com.noop.ingest.LiftingImporter
 import com.noop.notif.IllnessAlertNotifier
@@ -897,8 +899,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun applyPowerSaving() {
         val on = NoopPrefs.powerSaving(appContext)
         ble.setLowBatteryOffloadThrottle(if (on) NoopPrefs.powerSavingBatteryPct(appContext) else 0)
-        // HRV pause is a sub-option: only effective while the master is on (defaults on when it is).
-        ble.setPauseCaptureOnPowerSave(on && NoopPrefs.pauseHrvOnPowerSave(appContext))
+        // HRV pause is a sub-option: only effective while the master is on (defaults on when it is), and
+        // now battery-%-aware like the offload lever — pass the same threshold.
+        ble.setPauseCaptureOnPowerSave(
+            on && NoopPrefs.pauseHrvOnPowerSave(appContext),
+            NoopPrefs.powerSavingBatteryPct(appContext),
+        )
     }
 
     /** Flip "Power saving" (Settings). Persists + applies immediately. */
