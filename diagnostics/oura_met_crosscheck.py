@@ -42,6 +42,33 @@ def find_jsonl(explicit):
     return max(hits, key=os.path.getmtime)  # newest ring
 
 
+def ibihr_per_min(day):
+    """Per-minute HR reconstructed from the banked-IBI corpus (oura-ibihr-*.jsonl), or {} if none.
+    HR = 60000/ibiMs per beat, gated to a plausible 30-220 bpm; returns {utc_minute: [bpm,...]}."""
+    from collections import defaultdict
+    diag = os.path.join(STAGING, "Diagnostics")
+    hits = [os.path.join(diag, f) for f in os.listdir(diag)
+            if f.startswith("oura-ibihr-") and f.endswith(".jsonl")] if os.path.isdir(diag) else []
+    if not hits:
+        return {}, None
+    path = max(hits, key=os.path.getmtime)
+    per = defaultdict(list)
+    with open(path) as f:
+        for line in f:
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            if day and not r["iso"].startswith(day):
+                continue
+            for ibi in r.get("ibiMs", []):
+                if ibi <= 0:
+                    continue
+                bpm = round(60000 / ibi)
+                if 30 <= bpm <= 220:
+                    per[int(r["utc"] // 60)].append(bpm)
+    return per, os.path.basename(path)
+
+
 def load_samples(path, day):
     """Return (samples, records). samples = sorted [(utc, met, state)]; one entry per MET value,
     sample i of a record placed at record.utc + i*secPerSample (utc is the window START)."""
@@ -123,6 +150,19 @@ def sleep_windows(db, lo, hi):
         "ORDER BY startTs", (lo, hi)).fetchall()
     con.close()
     return rows
+
+
+def suunto_hr_per_min(path):
+    """{utc_minute: mean HR bpm} from a Suunto DeviceLog JSON (HR stored in Hz on some exports → ×60)."""
+    from collections import defaultdict
+    d = json.load(open(path))["DeviceLog"]
+    per = defaultdict(list)
+    for s in d["Samples"]:
+        if not isinstance(s, dict) or "TimeISO8601" not in s or s.get("HR") is None:
+            continue
+        hr = s["HR"]
+        per[int(datetime.fromisoformat(s["TimeISO8601"]).timestamp() // 60)].append(hr * 60 if hr < 10 else hr)
+    return {m: sum(v) / len(v) for m, v in per.items()}
 
 
 def suunto_profile(samples, path):
@@ -217,6 +257,38 @@ def main():
         hr = f"avgHR={avg} " if avg else ""
         print(f"  {sport:9s}[{source:13s}] {u(s)}-{u(e)}  {sc}{hr}\n"
               f"     Oura MET: {band(samples, s, e)}")
+
+    print("\n== Oura IBI-derived HR (reconstructed from banked IBIs, HR = 60000/ibi) ==")
+    hrmin, hrfile = ibihr_per_min(a.day)
+    if not hrmin:
+        print("  (no IBI-HR corpus yet — run the combined-branch build and re-sync to populate it)")
+    else:
+        def med(xs):
+            xs = sorted(xs); return xs[len(xs) // 2]
+        allb = [b for v in hrmin.values() for b in v]
+        print(f"  corpus: {hrfile}  {len(hrmin)} min with beats, {len(allb)} beats"
+              + (f", day={a.day}" if a.day else ""))
+        for sport, source, s, e, strain, avg, mx, kcal in wk:
+            mins = [m for m in hrmin if s // 60 <= m < (e + 59) // 60]
+            bpms = [b for m in mins for b in hrmin[m]]
+            if bpms:
+                extra = f"  (watch avgHR={avg})" if avg else ""
+                print(f"  {sport:9s} {u(s)}-{u(e)}: Oura-IBI HR median={med(bpms)} "
+                      f"n={len(bpms)} beats / {len(mins)} min{extra}")
+            else:
+                print(f"  {sport:9s} {u(s)}-{u(e)}: no IBI beats in window (motion gap?)")
+        if a.suunto:
+            sh = suunto_hr_per_min(a.suunto)
+            pairs = [(sum(hrmin[m]) / len(hrmin[m]), sh[m]) for m in hrmin if m in sh]
+            if len(pairs) > 2:
+                xs = [p[0] for p in pairs]; ys = [p[1] for p in pairs]
+                n = len(xs); mx_ = sum(xs) / n; my = sum(ys) / n
+                cov = sum((x - mx_) * (y - my) for x, y in pairs)
+                vx = sum((x - mx_) ** 2 for x in xs) ** .5
+                vy = sum((y - my) ** 2 for y in ys) ** .5
+                r = cov / (vx * vy) if vx and vy else float("nan")
+                print(f"  Oura-IBI HR vs Suunto HR per-minute r = {r:.2f} (n={n} min) "
+                      f"— the real test: does ring HR match the watch?")
 
     print("\n== dynamic range: sleep floor vs active (tracks a VARYING input?) ==")
     for dev, s, e in sleep_windows(db, lo, hi):

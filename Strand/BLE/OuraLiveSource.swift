@@ -217,6 +217,11 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// SQLite). Created only on a live/persisting source (nil for the discovery-only scanner). Deduped by
     /// ring-time so re-served records don't duplicate; logs its file path once when the first record lands.
     private let activityDump: OuraActivityDump?
+    /// Append-only JSONL research corpus for the banked-IBI → HR history (Tier-B, never scored). Captures
+    /// the HISTORY drain's per-beat IBIs (green-IBI 0x80 etc.) at their real anchored time so an HR series
+    /// (60000/ibiMs) can be reconstructed OFFLINE and its density measured (activity vs sleep) before any of
+    /// it is considered for strain. Same dedup/announce/gap discipline as `activityDump`.
+    private let ibiHrDump: OuraIbiHrDump?
     /// Cached local-day formatter (the 0x50 stream is high-volume; avoid building one per record).
     private static let activityDayFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f   // local time zone by default
@@ -687,6 +692,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         self.adoptIntent = adoptIntent
         // Tier-B MET research corpus: only on a live/persisting source, never the discovery-only scanner.
         self.activityDump = feedsLive && !deviceId.isEmpty ? OuraActivityDump(deviceId: deviceId, log: log) : nil
+        self.ibiHrDump = feedsLive && !deviceId.isEmpty ? OuraIbiHrDump(deviceId: deviceId, log: log) : nil
         super.init()
         // Dedicated queue-less central -> callbacks arrive on the main queue, matching @MainActor.
         self.central = CBCentralManager(delegate: self, queue: nil)
@@ -981,6 +987,24 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         for e in events {
             if let rt = e.envelopeRingTimestamp {
                 drain.noteSeenRingTime(rt)
+            }
+        }
+        // Tier-B: capture the HISTORY drain's per-beat IBIs → the HR-history research corpus (never scored).
+        // Beats from one decode share the record's ring-time; group by it and dump each ANCHORED record at
+        // its real beat time. Only history IBIs reach here (live-push HR/IBI goes through `ingestLiveHRPush`).
+        if let dump = ibiHrDump, let driver {
+            var byRing: [UInt32: [Int]] = [:]
+            var order: [UInt32] = []
+            for e in events {
+                if case .ibi(let ibi) = e {
+                    if byRing[ibi.ringTimestamp] == nil { order.append(ibi.ringTimestamp) }
+                    byRing[ibi.ringTimestamp, default: []].append(ibi.ibiMs)
+                }
+            }
+            for rt in order {
+                if let utc = driver.unixSeconds(forRingTimestamp: rt) {
+                    dump.record(ringTs: rt, utc: utc, ibiMs: byRing[rt] ?? [])
+                }
             }
         }
         if pendingContinuation { restartBatchQuietTimer() }
