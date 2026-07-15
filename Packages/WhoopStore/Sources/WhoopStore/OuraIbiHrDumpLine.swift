@@ -26,11 +26,13 @@ public enum OuraIbiHrDumpLine {
     ///   - ringTs: the record's raw ring-clock timestamp (the dedup key: strictly increases per record).
     ///   - utc:    the anchored wall-clock (unix seconds) for the record envelope — the REAL beat time.
     ///   - iso:    human-readable UTC of `utc` (convenience for eyeballing).
+    ///   - tag:    the source event tag these beats decoded from (0x80 green-IBI, 0x60/0x44 ibi+amp, 0x6E
+    ///             spo2-IBI), as a decimal int — lets the offline study separate clean vs noisy streams.
     ///   - ibiMs:  the record's per-beat inter-beat intervals in milliseconds (quality-gated by the decoder).
     public static func encode(deviceId: String, ringTs: UInt32, utc: Int, iso: String,
-                              ibiMs: [Int]) -> String {
+                              tag: Int, ibiMs: [Int]) -> String {
         let ibiStr = ibiMs.map { String($0) }.joined(separator: ",")
         return "{\"schema\":\(schema),\"deviceId\":\"\(deviceId)\",\"ringTs\":\(ringTs),"
-             + "\"utc\":\(utc),\"iso\":\"\(iso)\",\"ibiMs\":[\(ibiStr)]}"
+             + "\"utc\":\(utc),\"iso\":\"\(iso)\",\"tag\":\(tag),\"ibiMs\":[\(ibiStr)]}"
     }
 }

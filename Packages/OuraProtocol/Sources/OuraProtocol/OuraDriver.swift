@@ -297,15 +297,16 @@ public final class OuraDriver {
         }
         switch tag {
         // --- Tier A: HR / IBI ---
+        // Each history IBI is stamped with its source tag (research-corpus provenance; live push stays nil).
         case .ibiAmplitude:
-            return (OuraDecoders.decodeIBIAmplitude(record) ?? []).map { OuraEvent.ibi($0) }
+            return (OuraDecoders.decodeIBIAmplitude(record) ?? []).map { OuraEvent.ibi($0.tagged(tag.rawValue)) }
         case .greenIbiQuality:
-            return (OuraDecoders.decodeGreenIBIQuality(record) ?? []).map { OuraEvent.ibi($0) }
+            return (OuraDecoders.decodeGreenIBIQuality(record) ?? []).map { OuraEvent.ibi($0.tagged(tag.rawValue)) }
         case .spo2IbiAmplitude:
-            return (OuraDecoders.decodeSpO2IBI(record) ?? []).map { OuraEvent.ibi($0) }
+            return (OuraDecoders.decodeSpO2IBI(record) ?? []).map { OuraEvent.ibi($0.tagged(tag.rawValue)) }
         case .ibi:
             // The bare 0x44 IBI tag shares the bit-packed layout family; route through the same decoder.
-            return (OuraDecoders.decodeIBIAmplitude(record) ?? []).map { OuraEvent.ibi($0) }
+            return (OuraDecoders.decodeIBIAmplitude(record) ?? []).map { OuraEvent.ibi($0.tagged(tag.rawValue)) }
 
         // --- Tier A: HRV ---
         case .hrvRmssd:

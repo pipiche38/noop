@@ -41,13 +41,13 @@ final class OuraIbiHrDump {
     /// Append one anchored history-IBI record (all beats of one decode share `ringTs`). No-op when `ringTs`
     /// is not above the high-water (a re-serve) or when there are no beats. Best-effort: any file error is
     /// logged once and never disrupts the BLE path. Call ONLY with an anchored `utc` (the real beat time).
-    func record(ringTs: UInt32, utc: Int, ibiMs: [Int]) {
+    func record(ringTs: UInt32, utc: Int, tag: Int, ibiMs: [Int]) {
         guard !ibiMs.isEmpty, ringTs > highWater else { return }
         guard let url = resolveURL() else { return }
 
         let line = OuraIbiHrDumpLine.encode(
             deviceId: deviceId, ringTs: ringTs, utc: utc,
-            iso: Self.iso.string(from: Date(timeIntervalSince1970: TimeInterval(utc))), ibiMs: ibiMs)
+            iso: Self.iso.string(from: Date(timeIntervalSince1970: TimeInterval(utc))), tag: tag, ibiMs: ibiMs)
 
         guard let data = (line + "\n").data(using: .utf8) else { return }
         do {

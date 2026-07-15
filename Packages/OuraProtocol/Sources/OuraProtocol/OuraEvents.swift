@@ -15,8 +15,17 @@ public struct OuraIBI: Equatable, Sendable, Codable {
     public let ringTimestamp: UInt32
     public let ibiMs: Int
     public let amplitude: Int?
-    public init(ringTimestamp: UInt32, ibiMs: Int, amplitude: Int? = nil) {
+    /// The event tag this IBI was decoded from (0x80 green-IBI, 0x60/0x44 ibi+amp, 0x6E spo2-IBI), when the
+    /// driver stamped it — used ONLY by the banked-IBI research corpus to separate clean vs noisy history
+    /// streams. nil for the live-HR push and for decoder-level output (the decoders don't self-stamp).
+    public let sourceTag: UInt8?
+    public init(ringTimestamp: UInt32, ibiMs: Int, amplitude: Int? = nil, sourceTag: UInt8? = nil) {
         self.ringTimestamp = ringTimestamp; self.ibiMs = ibiMs; self.amplitude = amplitude
+        self.sourceTag = sourceTag
+    }
+    /// A copy tagged with the event it came from (the driver stamps this on HISTORY decodes only).
+    public func tagged(_ tag: UInt8) -> OuraIBI {
+        OuraIBI(ringTimestamp: ringTimestamp, ibiMs: ibiMs, amplitude: amplitude, sourceTag: tag)
     }
 }
 

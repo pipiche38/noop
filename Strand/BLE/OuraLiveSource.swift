@@ -993,17 +993,17 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         // Beats from one decode share the record's ring-time; group by it and dump each ANCHORED record at
         // its real beat time. Only history IBIs reach here (live-push HR/IBI goes through `ingestLiveHRPush`).
         if let dump = ibiHrDump, let driver {
-            var byRing: [UInt32: [Int]] = [:]
+            var byRing: [UInt32: (tag: Int, ibis: [Int])] = [:]
             var order: [UInt32] = []
             for e in events {
-                if case .ibi(let ibi) = e {
-                    if byRing[ibi.ringTimestamp] == nil { order.append(ibi.ringTimestamp) }
-                    byRing[ibi.ringTimestamp, default: []].append(ibi.ibiMs)
+                if case .ibi(let ibi) = e, let tag = ibi.sourceTag {   // history IBIs are tag-stamped; live push is nil
+                    if byRing[ibi.ringTimestamp] == nil { order.append(ibi.ringTimestamp); byRing[ibi.ringTimestamp] = (Int(tag), []) }
+                    byRing[ibi.ringTimestamp]?.ibis.append(ibi.ibiMs)
                 }
             }
             for rt in order {
-                if let utc = driver.unixSeconds(forRingTimestamp: rt) {
-                    dump.record(ringTs: rt, utc: utc, ibiMs: byRing[rt] ?? [])
+                if let g = byRing[rt], let utc = driver.unixSeconds(forRingTimestamp: rt) {
+                    dump.record(ringTs: rt, utc: utc, tag: g.tag, ibiMs: g.ibis)
                 }
             }
         }

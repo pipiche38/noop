@@ -42,17 +42,18 @@ def find_jsonl(explicit):
     return max(hits, key=os.path.getmtime)  # newest ring
 
 
-def ibihr_per_min(day):
-    """Per-minute HR reconstructed from the banked-IBI corpus (oura-ibihr-*.jsonl), or {} if none.
-    HR = 60000/ibiMs per beat, gated to a plausible 30-220 bpm; returns {utc_minute: [bpm,...]}."""
-    from collections import defaultdict
+TAG_NAME = {0x80: "green-IBI", 0x60: "ibi+amp", 0x6E: "spo2-IBI", 0x44: "ibi(0x44)"}
+
+
+def load_ibihr(day):
+    """Load the banked-IBI corpus (oura-ibihr-*.jsonl). Returns (records, filename) or ([], None)."""
     diag = os.path.join(STAGING, "Diagnostics")
     hits = [os.path.join(diag, f) for f in os.listdir(diag)
             if f.startswith("oura-ibihr-") and f.endswith(".jsonl")] if os.path.isdir(diag) else []
     if not hits:
-        return {}, None
+        return [], None
     path = max(hits, key=os.path.getmtime)
-    per = defaultdict(list)
+    recs = []
     with open(path) as f:
         for line in f:
             if not line.strip():
@@ -60,13 +61,24 @@ def ibihr_per_min(day):
             r = json.loads(line)
             if day and not r["iso"].startswith(day):
                 continue
-            for ibi in r.get("ibiMs", []):
-                if ibi <= 0:
-                    continue
-                bpm = round(60000 / ibi)
-                if 30 <= bpm <= 220:
-                    per[int(r["utc"] // 60)].append(bpm)
-    return per, os.path.basename(path)
+            recs.append(r)
+    return recs, os.path.basename(path)
+
+
+def ibihr_per_min(recs, tags=None):
+    """{utc_minute: [bpm,...]} from records, HR = 60000/ibiMs gated to 30-220 bpm. Optional tag filter."""
+    from collections import defaultdict
+    per = defaultdict(list)
+    for r in recs:
+        if tags is not None and r.get("tag") not in tags:
+            continue
+        for ibi in r.get("ibiMs", []):
+            if ibi <= 0:
+                continue
+            bpm = round(60000 / ibi)
+            if 30 <= bpm <= 220:
+                per[int(r["utc"] // 60)].append(bpm)
+    return per
 
 
 def load_samples(path, day):
@@ -259,7 +271,8 @@ def main():
               f"     Oura MET: {band(samples, s, e)}")
 
     print("\n== Oura IBI-derived HR (reconstructed from banked IBIs, HR = 60000/ibi) ==")
-    hrmin, hrfile = ibihr_per_min(a.day)
+    ibirecs, hrfile = load_ibihr(a.day)
+    hrmin = ibihr_per_min(ibirecs)
     if not hrmin:
         print("  (no IBI-HR corpus yet — run the combined-branch build and re-sync to populate it)")
     else:
@@ -268,6 +281,23 @@ def main():
         allb = [b for v in hrmin.values() for b in v]
         print(f"  corpus: {hrfile}  {len(hrmin)} min with beats, {len(allb)} beats"
               + (f", day={a.day}" if a.day else ""))
+        # Per-tag breakdown — WHICH history stream is clean vs noisy (the point of the tag label).
+        from collections import defaultdict
+        tag_beats, tag_arts = defaultdict(int), defaultdict(int)
+        for r in ibirecs:
+            for ibi in r.get("ibiMs", []):
+                t = r.get("tag")
+                tag_beats[t] += 1
+                if ibi <= 0 or not (30 <= round(60000 / ibi) <= 220):
+                    tag_arts[t] += 1
+        print("  by source tag:")
+        for t in sorted(tag_beats, key=lambda x: (x is None, x)):
+            per_t = ibihr_per_min(ibirecs, tags={t})
+            kept = [b for v in per_t.values() for b in v]
+            art = 100 * tag_arts[t] / tag_beats[t] if tag_beats[t] else 0
+            label = "0x%02X %-10s" % (t, TAG_NAME.get(t, "?")) if isinstance(t, int) else "untagged(old)   "
+            mstr = f"median HR={med(kept)}" if kept else "no valid HR"
+            print(f"    {label}: {tag_beats[t]:4d} beats, {art:2.0f}% artifact, {len(per_t)} min, {mstr}")
         for sport, source, s, e, strain, avg, mx, kcal in wk:
             mins = [m for m in hrmin if s // 60 <= m < (e + 59) // 60]
             bpms = [b for m in mins for b in hrmin[m]]
