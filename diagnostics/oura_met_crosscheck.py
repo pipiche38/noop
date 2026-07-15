@@ -44,6 +44,62 @@ def find_jsonl(explicit):
 
 TAG_NAME = {0x80: "green-IBI", 0x60: "ibi+amp", 0x6E: "spo2-IBI", 0x44: "ibi(0x44)"}
 
+# Human labels for the outer op / event tag seen in the RAW capture (superset of TAG_NAME — includes tags
+# NOOP decodes but the IBI corpus doesn't carry). Anything absent here prints as "?" so unknown tags surface.
+RAW_TAG_NAME = {**TAG_NAME,
+    0x50: "activity/MET", 0x47: "motion", 0x46: "temp", 0x49: "sleep-summary",
+    0x4E: "sleep-phase", 0x5A: "sleep-phase", 0x42: "time-anchor",
+}
+
+
+def find_raw(explicit):
+    if explicit:
+        return explicit
+    diag = os.path.join(STAGING, "Diagnostics")
+    hits = [os.path.join(diag, f) for f in os.listdir(diag)
+            if f.startswith("oura-raw-") and f.endswith(".jsonl")] if os.path.isdir(diag) else []
+    return max(hits, key=os.path.getmtime) if hits else None  # newest ring, or None
+
+
+def reframe_raw(path, day=None):
+    """Walk the RAW capture OFFLINE: each line's `hex` is one or more packed `op,len,body` TLV records.
+    Returns (per_tag_count, per_tag_minutes, n_lines, n_records, first_iso, last_iso, malformed).
+    `per_tag_minutes` keys tags to the set of UTC minutes their records arrived, for the decode-gap check.
+    Ring-time isn't in the raw frame (it's inside each body, tag-specific), so we bucket by ARRIVAL utc —
+    good enough to answer 'did a record of tag X arrive in this minute?' which is the drop question."""
+    from collections import defaultdict
+    counts, minutes = defaultdict(int), defaultdict(set)
+    n_lines = n_records = malformed = 0
+    first_iso = last_iso = None
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            iso = rec.get("iso", "")
+            if day and not iso.startswith(day):
+                continue
+            n_lines += 1
+            first_iso = first_iso or iso
+            last_iso = iso
+            minute = rec["utc"] // 60
+            hexs = rec.get("hex", "")
+            b = bytes.fromhex(hexs) if hexs else b""
+            i = 0
+            while i + 2 <= len(b):
+                op, ln = b[i], b[i + 1]
+                if i + 2 + ln > len(b):
+                    malformed += 1
+                    break
+                counts[op] += 1
+                minutes[op].add(minute)
+                n_records += 1
+                i += 2 + ln
+            if i != len(b) and i + 2 > len(b) and len(b) - i:
+                malformed += 1
+    return counts, minutes, n_lines, n_records, first_iso, last_iso, malformed
+
 
 def load_ibihr(day):
     """Load the banked-IBI corpus (oura-ibihr-*.jsonl). Returns (records, filename) or ([], None)."""
@@ -241,6 +297,8 @@ def main():
     ap.add_argument("--day", help="restrict to one UTC day, e.g. 2026-07-14 (default: whole corpus)")
     ap.add_argument("--suunto", help="a Suunto DeviceLog JSON export (a .fit-source walk/run/ride): "
                                      "prints Oura MET vs its per-minute speed/HR profile + correlation r")
+    ap.add_argument("--raw", nargs="?", const="auto", help="reframe the RAW capture (oura-raw-<id>.jsonl): "
+                    "TLV tag histogram + decode-drop cross-check. Bare flag = newest in staging Diagnostics")
     a = ap.parse_args()
 
     jsonl = find_jsonl(a.jsonl)
@@ -327,6 +385,31 @@ def main():
 
     if a.suunto:
         suunto_profile(samples, a.suunto)
+
+    if a.raw is not None:
+        raw = None if a.raw == "auto" else a.raw
+        raw = find_raw(raw)
+        print("\n== RAW capture: TLV tags actually received (decode-drop vs ring-side) ==")
+        if not raw or not os.path.exists(raw):
+            print("  (no raw capture yet — run the combined-branch build and re-sync to populate it)")
+        else:
+            counts, rawmin, nl, nr, f_iso, l_iso, bad = reframe_raw(raw, a.day)
+            print(f"  corpus: {os.path.basename(raw)}  {nl} notifications, {nr} TLV records"
+                  + (f", day={a.day}" if a.day else ""))
+            if f_iso:
+                print(f"        span: {f_iso} → {l_iso}" + (f"   malformed frames: {bad}" if bad else ""))
+            # MET (0x50) minutes present in RAW but absent from the DECODED MET corpus = a decode drop we
+            # can now name; both absent = the ring genuinely didn't send them. This is the whole point.
+            met_min_decoded = {s[0] // 60 for s in samples}
+            met_raw = rawmin.get(0x50, set())
+            drop = sorted(m for m in met_raw if m not in met_min_decoded)
+            for op in sorted(counts):
+                label = "0x%02X %-13s" % (op, RAW_TAG_NAME.get(op, "?"))
+                print(f"    {label}: {counts[op]:5d} records, {len(rawmin[op])} min")
+            if met_raw:
+                print(f"  MET decode-drop check: {len(met_raw)} raw-MET minutes, "
+                      f"{len(drop)} present in RAW but MISSING from decoded corpus"
+                      + (f" (e.g. {u(drop[0]*60)}…)" if drop else " — no drops, holes are ring-side"))
 
     print("\n== coverage / gaps (uncovered minutes = undercount in any daily total) ==")
     coverage(recs)

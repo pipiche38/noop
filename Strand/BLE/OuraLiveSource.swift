@@ -222,6 +222,11 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// (60000/ibiMs) can be reconstructed OFFLINE and its density measured (activity vs sleep) before any of
     /// it is considered for strain. Same dedup/announce/gap discipline as `activityDump`.
     private let ibiHrDump: OuraIbiHrDump?
+    /// Append-only JSONL capture of the RAW, undecoded history-drain notification bytes (`oura-raw-<id>.jsonl`).
+    /// Complement to the decoded sidecars above: those show what NOOP interpreted, this shows exactly what the
+    /// ring sent, so after a full connect a hole in a decoded file can be pinned as a decode drop vs ring-side.
+    /// No dedup (a re-serve is still evidence the ring re-sent it); the offline reframer collapses duplicates.
+    private let rawDump: OuraRawDump?
     /// Cached local-day formatter (the 0x50 stream is high-volume; avoid building one per record).
     private static let activityDayFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f   // local time zone by default
@@ -693,6 +698,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         // Tier-B MET research corpus: only on a live/persisting source, never the discovery-only scanner.
         self.activityDump = feedsLive && !deviceId.isEmpty ? OuraActivityDump(deviceId: deviceId, log: log) : nil
         self.ibiHrDump = feedsLive && !deviceId.isEmpty ? OuraIbiHrDump(deviceId: deviceId, log: log) : nil
+        self.rawDump = feedsLive && !deviceId.isEmpty ? OuraRawDump(deviceId: deviceId, log: log) : nil
         super.init()
         // Dedicated queue-less central -> callbacks arrive on the main queue, matching @MainActor.
         self.central = CBCentralManager(delegate: self, queue: nil)
@@ -1617,11 +1623,13 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
             let tlvBytes = frames.filter { $0.op != OuraFraming.secureSessionOp && $0.op != Self.setAuthKeyRespOp }
                                  .flatMap { [$0.op, UInt8($0.body.count)] + $0.body }
             if !tlvBytes.isEmpty {
+                rawDump?.record(bytes: tlvBytes)
                 ingestHistory(driver.ingest(notification: tlvBytes, reassembler: reassembler))
             }
             return
         }
         // No secure frame in this notification: treat the whole value as TLV record bytes.
+        rawDump?.record(bytes: bytes)
         ingestHistory(driver.ingest(notification: bytes, reassembler: reassembler))
     }
 
