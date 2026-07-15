@@ -125,11 +125,70 @@ def sleep_windows(db, lo, hi):
     return rows
 
 
+def suunto_profile(samples, path):
+    """Oura MET vs a Suunto ground-truth profile, per minute, over the recorded session.
+
+    Turns the single mean/p50 into a WITHIN-session tracking check: does MET rise and fall WITH the
+    watch's speed? `samples` = the Oura MET (utc, met, state) list; `path` = a Suunto DeviceLog JSON.
+    Suunto stores HR in Hz on some exports (< 10) — converted to bpm for display; the correlation is
+    MET-vs-speed and does not depend on that. Prints one row per minute + Pearson r over the overlap.
+    """
+    from collections import defaultdict
+    d = json.load(open(path))["DeviceLog"]
+    hdr = d["Header"]
+
+    def ep(iso):  # ISO8601 with offset (e.g. +02:00) → UTC epoch
+        return datetime.fromisoformat(iso).timestamp()
+
+    su = defaultdict(lambda: {"hr": [], "spd": []})
+    for s in d["Samples"]:
+        if not isinstance(s, dict) or "TimeISO8601" not in s:
+            continue
+        m = int(ep(s["TimeISO8601"]) // 60)
+        hr = s.get("HR")
+        if hr is not None:
+            su[m]["hr"].append(hr * 60 if hr < 10 else hr)
+        if s.get("Speed") is not None:
+            su[m]["spd"].append(s["Speed"])
+
+    met = defaultdict(list)
+    for (t, mv, _s) in samples:
+        met[int(t // 60)].append(mv)
+
+    start = int(ep(hdr["DateTime"]) // 60)
+    dur = int((hdr.get("Duration") or 0) // 60)
+    act = {12: "Walking"}.get(hdr.get("ActivityType"), f"activity {hdr.get('ActivityType')}")
+    kcal = round((hdr.get("Energy") or 0) / 4184)
+    print(f"\n== Oura MET vs Suunto profile — {act}, {hdr.get('StepCount')} steps, "
+          f"{hdr.get('Distance')} m, {kcal} kcal ==")
+    print("  min(UTC)     | Suunto HR  km/h | Oura MET")
+    xs, ys = [], []
+    for m in range(start, start + dur + 2):
+        s_, o_ = su.get(m), met.get(m)
+        hr = f"{sum(s_['hr'])/len(s_['hr']):.0f}" if s_ and s_["hr"] else "-"
+        spd = f"{3.6*sum(s_['spd'])/len(s_['spd']):.1f}" if s_ and s_["spd"] else "-"
+        mt = f"{sum(o_)/len(o_):.2f}" if o_ else "-"
+        print(f"  {u(m*60)}  |   {hr:>3}    {spd:>4} |  {mt}")
+        if s_ and s_["spd"] and o_:
+            xs.append(sum(s_["spd"]) / len(s_["spd"])); ys.append(sum(o_) / len(o_))
+    if len(xs) > 2:
+        n = len(xs); mx = sum(xs) / n; my = sum(ys) / n
+        cov = sum((a - mx) * (b - my) for a, b in zip(xs, ys))
+        vx = sum((a - mx) ** 2 for a in xs) ** .5
+        vy = sum((b - my) ** 2 for b in ys) ** .5
+        r = cov / (vx * vy) if vx and vy else float("nan")
+        print(f"\n  MET vs Suunto-speed per-minute correlation r = {r:.2f}  (n={n} min)")
+    else:
+        print("  (not enough overlapping minutes for a correlation)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--jsonl", help="MET corpus JSONL (default: newest in staging Diagnostics)")
     ap.add_argument("--db", help="app SQLite (default: staging whoop.sqlite)")
     ap.add_argument("--day", help="restrict to one UTC day, e.g. 2026-07-14 (default: whole corpus)")
+    ap.add_argument("--suunto", help="a Suunto DeviceLog JSON export (a .fit-source walk/run/ride): "
+                                     "prints Oura MET vs its per-minute speed/HR profile + correlation r")
     a = ap.parse_args()
 
     jsonl = find_jsonl(a.jsonl)
@@ -163,6 +222,9 @@ def main():
     for dev, s, e in sleep_windows(db, lo, hi):
         tag = "oura" if dev.startswith("oura-") and dev != "oura-import" else dev.split("-")[0]
         print(f"  sleep[{tag:11s}] {u(s)}-{u(e)}: {band(samples, s, e)}")
+
+    if a.suunto:
+        suunto_profile(samples, a.suunto)
 
     print("\n== coverage / gaps (uncovered minutes = undercount in any daily total) ==")
     coverage(recs)
