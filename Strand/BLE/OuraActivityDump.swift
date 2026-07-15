@@ -19,6 +19,10 @@ final class OuraActivityDump {
     private var fileURL: URL?
     private var resolveFailed = false
     private var announced = false
+    /// End (`utc` + N·`secPerSample`) of the previously-written record's window, for the coverage-gap
+    /// diagnostic. In-memory ONLY (per launch) so a relaunch's first record never reports the — expected —
+    /// hole since the app was last open; nil until the first record this session.
+    private var lastWindowEndUtc: Int?
 
     private static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -64,6 +68,16 @@ final class OuraActivityDump {
             announced = true
             log("Oura: activity MET dump → \(url.path) [Tier-B research corpus, JSONL, deduped by ring-time]")
         }
+
+        // Coverage-gap diagnostic: the corpus shows systematic multi-minute holes (~82% coverage on a
+        // choppy day), so day-level active-minute totals undercount. Surface each gap between this record's
+        // window and the previous one so we can tell RING-side cadence (the ring simply didn't log those
+        // minutes) from a drain/decode drop. Threshold > 2 min ignores the normal record-to-record seam.
+        let windowEnd = utc + met.count * secPerSample
+        if let prevEnd = lastWindowEndUtc, utc - prevEnd > 120 {
+            log("Oura: activity MET gap - \((utc - prevEnd) / 60) min no records [\(Self.iso.string(from: Date(timeIntervalSince1970: TimeInterval(prevEnd)))) → \(Self.iso.string(from: Date(timeIntervalSince1970: TimeInterval(utc))))]")
+        }
+        lastWindowEndUtc = windowEnd
     }
 
     /// Resolve (and create on first use) the sidecar file + its parent directory. Cached; a failure is
