@@ -860,7 +860,11 @@ fun TodayScreen(
     // (Baselines.minNightsSeed valid nights). Show honest "calibrating, N of 4 nights" progress
     // instead of a bare "No Data" so a new BLE-only user knows scores are coming, not broken. (PR #85)
     val recoveryCalibration: Int? = if (selectedDayOffset == 0) {
-        recoveryCalibrationNights(days, displayMetric?.recovery != null)
+        // Thread the persisted "Recalibrate HRV baseline" epoch (0 = none) so N folds the SAME
+        // epoch-aware history the recovery engine folds — otherwise a post-recalibration user's pre-epoch
+        // nights inflate the count past the seed gate and the score side wrongly reads NeedsStrap (Bug B).
+        val hrvEpoch = NoopPrefs.of(context).getLong(Baselines.hrvBaselineEpochKey, 0L).toDouble()
+        recoveryCalibrationNights(days, displayMetric?.recovery != null, hrvEpoch)
     } else {
         null
     }
@@ -925,6 +929,20 @@ fun TodayScreen(
             prior.recovery?.let { LastCharge(it, carriedCaption(prior.day, carryOverTodayKey)) }
         }
     }
+    var carriedRecoverySource by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(lastScoredRecoveryDay?.day, viewModel.activeStrapId) {
+        val carriedDay = lastScoredRecoveryDay?.day
+        carriedRecoverySource = if (carriedDay == null) {
+            null
+        } else {
+            runCatching {
+                viewModel.repo.resolvedSeries("recovery", "my-whoop", carriedDay, carriedDay,
+                    strapDeviceId = viewModel.activeStrapId)
+                    .points.lastOrNull { it.day == carriedDay }
+                    ?.source
+            }.getOrNull()
+        }
+    }
 
     // Explainability (COMPONENT 2): the honest state of the score side for TODAY, scored / calibrating /
     // carried-last-night / needs-strap. One state, never a bare blank, and never a fabricated number. Only
@@ -944,10 +962,11 @@ fun TodayScreen(
 
     // One honest card-level badge, matching LiquidTodayView: identical winners collapse to one label;
     // mixed winners show at most two sources in Charge / Effort / Rest order so the pill stays compact.
-    val heroSourceLabel = remember(provenanceByMetric, viewModel.activeStrapId) {
-        heroSourceLabel(
-            rawSources = listOf("recovery", "strain", "sleep_performance")
-                .mapNotNull { provenanceByMetric[it] },
+    val heroSourceLabel = remember(provenanceByMetric, carriedRecoverySource, displayMetric?.recovery, lastScoredCharge, viewModel.activeStrapId) {
+        scoreHeroSourceLabel(
+            provenanceByMetric = provenanceByMetric,
+            carriedRecoverySource = carriedRecoverySource,
+            usesCarriedRecovery = displayMetric?.recovery == null && lastScoredCharge != null,
             deviceId = viewModel.activeStrapId,
         )
     }
@@ -4050,25 +4069,34 @@ private fun ContributorBar(label: String, readout: String, fraction: Double?, co
 }
 
 /**
- * Recent nights carrying a usable nightly HRV, the signal that seeds the recovery baseline. While
- * recovery is still null and this count is in [1, seed), it is the honest "calibrating N of <seed>"
- * progress shown in place of "No Data"; null once recovery exists or no night has data yet. Pure +
- * unit-tested (RecoveryCalibrationTest). Mirrors Baselines.minNightsSeed as the seed gate. (PR #85)
+ * The recovery baseline's real seed count while it still cold-starts, the honest "calibrating N of
+ * <seed>" progress shown in place of "No Data"; null once recovery exists or the baseline has crossed
+ * the seed gate. N is the HRV baseline's `nValid` from folding the SAME day-keyed, epoch-aware history
+ * the recovery engine folds ([Baselines.foldHistory] with [hrvBaselineEpoch]), NOT a looser per-night
+ * bounds count.
+ *
+ * The old count advanced on every in-range night, including nights the engine's fold DROPS after a
+ * manual "Recalibrate HRV baseline" (each night dated before the epoch is discarded, not skip-and-held).
+ * A genuinely-calibrating user who had >= seed old in-range nights therefore read `count >= seed → null`,
+ * and the Today score side fell through to [ScoreState.NeedsStrap] while the post-recalibration baseline
+ * was still seeding (Bug B, #393 follow-up). `nValid` is the exact count Baselines.computeStatus gates
+ * CALIBRATING on, so N now tracks the baseline the Charge ring rides and can never over-state it.
+ * [days] is oldest→newest (same order the engine folds). Pure + unit-tested (RecoveryCalibrationTest).
+ * (PR #85)
  */
 internal fun recoveryCalibrationNights(
     days: List<DailyMetric>,
     hasRecovery: Boolean,
+    hrvBaselineEpoch: Double,
     seed: Int = Baselines.minNightsSeed,
 ): Int? {
     if (hasRecovery) return null
-    // Match the baseline's validity predicate, not just non-null: Baselines.update only advances the
-    // recovery seed (nValid) for nights whose avgHrv is within the HRV config bounds, so an implausible
-    // out-of-range night must NOT be counted here either, else the displayed N could over-state nValid.
-    val cfg = Baselines.hrvCfg
+    val n = Baselines.foldHistory(
+        days.map { it.avgHrv }, days.map { it.day }, Baselines.hrvCfg, hrvBaselineEpoch,
+    ).nValid
     // Include 0: a brand-new user (no banked nights) reads "Calibrating, 0 of N" on Charge, not a
     // bare "No data" that looks broken (#335). Caller gates past days to null; >= seed → null.
-    return days.count { val v = it.avgHrv; v != null && v in cfg.minVal..cfg.maxVal }
-        .takeIf { it in 0 until seed }
+    return n.takeIf { it in 0 until seed }
 }
 
 /**
@@ -4532,6 +4560,30 @@ internal fun heroSourceLabel(
         if (labels.size == 2) break
     }
     return labels.takeIf { it.isNotEmpty() }?.joinToString(" + ")
+}
+
+/**
+ * Source label for the three visible hero scores. Today can show a carried Charge from the previous
+ * scored night while today's recovery is still absent (#543); in that state the selected-day
+ * "recovery" provenance is also absent, so use the carried night's resolved recovery source instead of
+ * letting the card badge omit or misrepresent the visible Charge (#390).
+ */
+internal fun scoreHeroSourceLabel(
+    provenanceByMetric: Map<String, String>,
+    carriedRecoverySource: String?,
+    usesCarriedRecovery: Boolean,
+    deviceId: String = WhoopRepository.WHOOP_SOURCE,
+): String? {
+    val recoverySource = provenanceByMetric["recovery"]
+        ?: if (usesCarriedRecovery) carriedRecoverySource else null
+    return heroSourceLabel(
+        rawSources = listOfNotNull(
+            recoverySource,
+            provenanceByMetric["strain"],
+            provenanceByMetric["sleep_performance"],
+        ),
+        deviceId = deviceId,
+    )
 }
 
 /** The tint for a per-metric provenance badge, keyed on the resolved LABEL, gold for Whoop, cyan for
