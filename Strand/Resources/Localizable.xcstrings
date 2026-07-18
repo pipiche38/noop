@@ -8638,7 +8638,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld / %lld 次次訓練"
+            "value": "%lld / %lld 次訓練"
           }
         }
       }
@@ -9160,7 +9160,7 @@
         "pt-PT": {
           "stringUnit": {
             "state": "needs_review",
-            "value": "%lld leitura%@ · os teus próprias entradas"
+            "value": "%lld leitura%@ · as tuas próprias entradas"
           }
         },
         "ru": {
@@ -9612,7 +9612,7 @@
         "pt-PT": {
           "stringUnit": {
             "state": "needs_review",
-            "value": "%lld leituras · os teus próprias entradas"
+            "value": "%lld leituras · as tuas próprias entradas"
           }
         },
         "ru": {
@@ -9896,7 +9896,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld 次次訓練"
+            "value": "%lld 次訓練"
           }
         }
       }
@@ -10006,7 +10006,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld 次次訓練 · %@"
+            "value": "%lld 次訓練 · %@"
           }
         }
       }
@@ -10064,7 +10064,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld 次次訓練 · 稀疏，已放寬至 %@"
+            "value": "%lld 次訓練 · 稀疏，已放寬至 %@"
           }
         }
       }
@@ -13385,7 +13385,7 @@
         "pt-PT": {
           "stringUnit": {
             "state": "needs_review",
-            "value": "1 leitura · os teus próprias entradas"
+            "value": "1 leitura · as tuas próprias entradas"
           }
         },
         "ru": {
@@ -131939,7 +131939,7 @@
         "pt-PT": {
           "stringUnit": {
             "state": "needs_review",
-            "value": "A línea es el índice de 0–3 de cada hora despierta, puntuado versus os teus próprias horas de calma de hoje. A barra de abajo divide o teu dia en tempo de estrés baixo, moderado e alto."
+            "value": "A linha é o indicador de 0–3 de cada hora acordada, pontuado em relação às tuas próprias horas de calma de hoje. A barra abaixo divide o teu dia em tempo de stress baixo, moderado e alto."
           }
         },
         "ru": {
