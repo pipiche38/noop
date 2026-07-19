@@ -143,6 +143,12 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Reassembles notification fragments into complete TLV inner records across feeds.
     private let reassembler = OuraReassembler()
 
+    /// Live wear/charge indicator: a pulse (IBI) means the ring is on a finger; the ring's own "chg.
+    /// detected"/"stopped" STATE strings bracket a charging period. Only fed while `feedsLive` (a history
+    /// re-serve is out of order and would flap it). Mirrored to `live.ouraWearState` for the UI + sleep gate.
+    private let wearTracker = OuraWearTracker()
+    private var loggedWearState: OuraWearState?
+
     /// Logs the FIRST live HR sample of a connection only (never every push); reset on stop/disconnect.
     private var loggedFirstHR = false
     /// The ring's optical HR needs a beat or two to settle after (re)subscribe, so the very first live-HR
@@ -519,6 +525,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         driver?.stop()
         driver = nil
         reassembler.reset()
+        wearTracker.reset(); loggedWearState = nil
         loggedFirstHR = false
         droppedFirstLiveHR = false
         loggedFirstTemp = false
@@ -726,7 +733,11 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 enqueue([e], ts: now)
 
             case .ibi(let ibi):
-                if feedsLive { live.setRRIntervals([ibi.ibiMs]) }
+                if feedsLive {
+                    live.setRRIntervals([ibi.ibiMs])
+                    wearTracker.notePulse()        // a beat only comes from a finger -> worn
+                    publishWearState()
+                }
                 enqueue([e], ts: now)
 
             case .battery(let bat):
@@ -841,8 +852,33 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                     lastActivitySampleCount = info.met.count
                 }
 
+            case .state(let s):
+                // The ring's own lifecycle strings (0x45/0x53). Charger transitions drive the wear badge;
+                // never a durable Streams row. Only the LIVE stream updates the indicator (a history
+                // re-serve is out of order and would flap it).
+                if feedsLive {
+                    wearTracker.note(state: s)
+                    publishWearState()
+                }
+
             default:
-                break   // motion / state / debugText: not a durable Streams row (see OuraStreamMapping)
+                break   // motion / debugText / etc: not a durable Streams row (see OuraStreamMapping)
+            }
+        }
+    }
+
+    /// Mirror the tracker's current wear/charge state to the observable, and log each TRANSITION once (a
+    /// charger on/off or first pulse is worth a strap-log line; steady state is not).
+    private func publishWearState() {
+        let s = wearTracker.current
+        if feedsLive { live.ouraWearState = s }
+        if s != loggedWearState {
+            loggedWearState = s
+            switch s {
+            case .charging: log("Oura: on charger (not worn) - HR/IBI paused until removed")
+            case .worn:     log("Oura: worn - pulse detected")
+            case .off:      log("Oura: off charger - awaiting pulse")
+            case .unknown:  break
             }
         }
     }
@@ -997,6 +1033,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         pendingInstallKey = nil
         adoptPhase = .idle
         reassembler.reset()
+        wearTracker.reset(); loggedWearState = nil
         // Per-drain cursor state starts clean each session (fetchHistoryIfIdle re-arms it per drain).
         drain.reset()
         resumeCursorAtFetchStart = 0
@@ -1045,6 +1082,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         driver?.stop()
         driver = nil
         reassembler.reset()
+        wearTracker.reset(); loggedWearState = nil
         writeCharacteristic = nil
         loggedFirstHR = false
         droppedFirstLiveHR = false
