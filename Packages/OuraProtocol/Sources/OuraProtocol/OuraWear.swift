@@ -127,7 +127,10 @@ public final class OuraWearTracker {
         else if OuraWear.isChargerStop(state) { current = .off }
     }
 
-    /// A pulse (an IBI record) was decoded — only a finger produces one, so the ring is WORN.
+    /// A LIVE heart-rate beat was streamed (the 0x2F live-HR push) — that stream exists only while the ring
+    /// is measuring on a finger, so the ring is WORN. Do NOT call this for a banked/history IBI: a history
+    /// re-serve can carry beats from a PAST night and would falsely flip the badge to worn while the ring
+    /// is actually on the charger. Live push only.
     public func notePulse() { current = .worn }
 
     /// Reset to `.unknown` (a fresh connection / session).

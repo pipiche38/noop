@@ -159,9 +159,10 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// the same records next drain. Reset per connection.
     private var pendingUnanchoredBursts: [OuraHypnogramBurst] = []
 
-    /// Live wear/charge indicator: a pulse (IBI) means the ring is on a finger; the ring's own "chg.
-    /// detected"/"stopped" STATE strings bracket a charging period. Only fed while `feedsLive` (a history
-    /// re-serve is out of order and would flap it). Mirrored to `live.ouraWearState` for the UI + sleep gate.
+    /// Live wear/charge indicator: a LIVE-HR push (.hr) means the ring is on a finger; the ring's own "chg.
+    /// detected"/"stopped" STATE strings bracket a charging period. Fed ONLY from the live push and STATE
+    /// (never a banked .ibi, which can be a past-night re-serve) and only while `feedsLive`. Mirrored to
+    /// `live.ouraWearState` for the UI + sleep gate.
     private let wearTracker = OuraWearTracker()
     private var loggedWearState: OuraWearState?
 
@@ -1105,15 +1106,16 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 if feedsLive {
                     live.heartRate = hr.bpm
                     live.connected = true
+                    // A LIVE HR push (0x2F) exists only while the ring is measuring on a finger, so it is
+                    // the sole safe "worn now" signal. A banked IBI (.ibi below) can be a history re-serve
+                    // from a past night, so it must NOT flip the badge to worn.
+                    wearTracker.notePulse()
+                    publishWearState()
                 }
                 enqueue([e], ts: now)
 
             case .ibi(let ibi):
-                if feedsLive {
-                    live.setRRIntervals([ibi.ibiMs])
-                    wearTracker.notePulse()        // a beat only comes from a finger -> worn
-                    publishWearState()
-                }
+                if feedsLive { live.setRRIntervals([ibi.ibiMs]) }
                 enqueue([e], ts: now)
 
             case .battery(let bat):
@@ -1323,9 +1325,9 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         if s != loggedWearState {
             loggedWearState = s
             switch s {
-            case .charging: log("Oura: on charger (not worn) - HR/IBI paused until removed")
-            case .worn:     log("Oura: worn - pulse detected")
-            case .off:      log("Oura: off charger - awaiting pulse")
+            case .worn:     log("Oura: ring WORN - live HR streaming")
+            case .charging: log("Oura: ring NOT WORN - on charger (HR/IBI paused until removed)")
+            case .off:      log("Oura: ring NOT WORN - off charger, awaiting a live pulse")
             case .unknown:  break
             }
         }
