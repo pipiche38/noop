@@ -167137,6 +167137,336 @@
         }
       }
     },
+    "%lld workouts": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Workouts"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld entrenamientos"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld entraînements"
+          }
+        }
+      }
+    },
+    "1 min": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Min."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 min"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 min"
+          }
+        }
+      }
+    },
+    "1 workout": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Workout"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 entrenamiento"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 entraînement"
+          }
+        }
+      }
+    },
+    "2 min": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2 Min."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2 min"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2 min"
+          }
+        }
+      }
+    },
+    "5 min": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5 Min."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5 min"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5 min"
+          }
+        }
+      }
+    },
+    "After high-intensity effort": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nach hochintensiver Belastung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Después de un esfuerzo de alta intensidad"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Après un effort intense"
+          }
+        }
+      }
+    },
+    "Heart Rate Recovery": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Herzfrequenzerholung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recuperación de la frecuencia cardíaca"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Récupération de la fréquence cardiaque"
+          }
+        }
+      }
+    },
+    "Heart rate recovery at %@, %lld beats per minute": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Herzfrequenzerholung nach %1$@: %2$lld Schläge pro Minute"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recuperación de la frecuencia cardíaca a los %1$@: %2$lld latidos por minuto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Récupération de la fréquence cardiaque à %1$@ : %2$lld battements par minute"
+          }
+        }
+      }
+    },
+    "Heart rate recovery at %@, not available": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Herzfrequenzerholung nach %1$@: nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recuperación de la frecuencia cardíaca a los %1$@: no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Récupération de la fréquence cardiaque à %1$@ : indisponible"
+          }
+        }
+      }
+    },
+    "Heart-rate recovery · %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Herzfrequenzerholung · %1$@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recuperación cardíaca · %1$@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Récupération cardiaque · %1$@"
+          }
+        }
+      }
+    },
+    "Heart-rate recovery trend in beats per minute": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trend der Herzfrequenzerholung in Schlägen pro Minute"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tendencia de recuperación de la frecuencia cardíaca en latidos por minuto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tendance de récupération de la fréquence cardiaque en battements par minute"
+          }
+        }
+      }
+    },
+    "Peak %lld bpm": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spitze %lld bpm"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pico de %lld lpm"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pic à %lld bpm"
+          }
+        }
+      }
+    },
+    "Recovery Trend": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erholungstrend"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tendencia de recuperación"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tendance de récupération"
+          }
+        }
+      }
+    },
+    "The change from your heart rate at the end of exercise. Positive values mean your heart rate fell; a dash means the strap did not record enough data around that minute.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Veränderung gegenüber deiner Herzfrequenz am Ende der Belastung. Positive Werte bedeuten, dass deine Herzfrequenz gesunken ist; ein Strich bedeutet, dass das Band um diese Minute herum nicht genügend Daten aufgezeichnet hat."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El cambio respecto a tu frecuencia cardíaca al terminar el ejercicio. Los valores positivos indican que la frecuencia cardíaca bajó; un guion indica que la pulsera no registró suficientes datos alrededor de ese minuto."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La variation par rapport à votre fréquence cardiaque à la fin de l’exercice. Une valeur positive indique que la fréquence cardiaque a baissé ; un tiret signifie que le bracelet n’a pas enregistré assez de données autour de cette minute."
+          }
+        }
+      }
+    },
+    "Each line shows how many beats per minute your heart rate changed after exercise. Only high-intensity workouts with recorded post-workout heart rate are included.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jede Linie zeigt, um wie viele Schläge pro Minute sich deine Herzfrequenz nach der Belastung verändert hat. Berücksichtigt werden nur hochintensive Workouts mit aufgezeichneter Herzfrequenz nach der Belastung."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cada línea muestra cuántos latidos por minuto cambió tu frecuencia cardíaca después del ejercicio. Solo se incluyen entrenamientos de alta intensidad con frecuencia cardíaca registrada después del ejercicio."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chaque ligne indique de combien de battements par minute votre fréquence cardiaque a changé après l’effort. Seuls les entraînements intenses avec une fréquence cardiaque enregistrée après l’effort sont inclus."
+          }
+        }
+      }
+    },
     "v%lld history": {
       "localizations": {
         "de": {
