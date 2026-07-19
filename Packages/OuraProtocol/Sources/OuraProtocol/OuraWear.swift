@@ -133,6 +133,14 @@ public final class OuraWearTracker {
     /// is actually on the charger. Live push only.
     public func notePulse() { current = .worn }
 
+    /// No live beat has arrived for longer than expected while HR was streaming — the ring came off the
+    /// finger (the ring emits no "removed" event; a stopped live-HR stream is the only signal). Downgrades
+    /// `.worn` -> `.off` only; never overrides `.charging` (the charger STATE is authoritative) or a state
+    /// that was already not-worn. The caller owns the timing (a wall-clock watchdog); the tracker stays pure.
+    public func noteLivePulseTimeout() {
+        if current == .worn { current = .off }
+    }
+
     /// Reset to `.unknown` (a fresh connection / session).
     public func reset() { current = .unknown }
 }

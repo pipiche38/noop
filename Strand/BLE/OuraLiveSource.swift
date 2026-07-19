@@ -165,6 +165,13 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// `live.ouraWearState` for the UI + sleep gate.
     private let wearTracker = OuraWearTracker()
     private var loggedWearState: OuraWearState?
+    /// When the last LIVE-HR beat arrived. If the stream goes quiet for `wornPulseTimeout` while we are
+    /// still re-engaging it, the ring came off the finger (there is no "removed" event) -> NOT WORN.
+    private var lastLivePulseAt: Date?
+    /// Grace before a silent live-HR stream means "removed": the ring auto-reverts DHR ~20 s and we
+    /// re-engage every `reengageInterval` (15 s), so a worn ring resumes beats well within this; exceeding
+    /// it means no finger. Checked on the re-engage tick, so worst-case detection is this + one interval.
+    private let wornPulseTimeout: TimeInterval = 40
 
     /// Logs the FIRST live HR sample of a connection only (never every push); reset on stop/disconnect.
     private var loggedFirstHR = false
@@ -820,7 +827,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         driver?.stop()
         driver = nil
         reassembler.reset()
-        wearTracker.reset(); loggedWearState = nil
+        wearTracker.reset(); loggedWearState = nil; lastLivePulseAt = nil
         loggedFirstHR = false
         droppedFirstLiveHR = false
         loggedFirstTemp = false
@@ -1109,6 +1116,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                     // A LIVE HR push (0x2F) exists only while the ring is measuring on a finger, so it is
                     // the sole safe "worn now" signal. A banked IBI (.ibi below) can be a history re-serve
                     // from a past night, so it must NOT flip the badge to worn.
+                    lastLivePulseAt = Date()
                     wearTracker.notePulse()
                     publishWearState()
                 }
@@ -1327,7 +1335,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
             switch s {
             case .worn:     log("Oura: ring WORN - live HR streaming")
             case .charging: log("Oura: ring NOT WORN - on charger (HR/IBI paused until removed)")
-            case .off:      log("Oura: ring NOT WORN - off charger, awaiting a live pulse")
+            case .off:      log("Oura: ring NOT WORN - no live HR (removed / off charger)")
             case .unknown:  break
             }
         }
@@ -1355,6 +1363,13 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private func reengageLiveHR() {
         guard let driver, reachedStreaming, driver.phase != .fetchingHistory else { return }
         write(driver.reengageLiveHRCommands())
+        // Live-HR watchdog: if the stream has gone silent past the grace window while we were WORN, the
+        // ring came off the finger (no "removed" event exists) -> NOT WORN. Only meaningful once we have
+        // seen at least one live beat this session.
+        if feedsLive, let last = lastLivePulseAt, Date().timeIntervalSince(last) > wornPulseTimeout {
+            wearTracker.noteLivePulseTimeout()
+            publishWearState()
+        }
     }
 
     // MARK: - Honest needs-pairing fallback (Huami precedent)
@@ -1492,7 +1507,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         pendingInstallKey = nil
         adoptPhase = .idle
         reassembler.reset()
-        wearTracker.reset(); loggedWearState = nil
+        wearTracker.reset(); loggedWearState = nil; lastLivePulseAt = nil
         // Per-drain cursor state starts clean each session (fetchHistoryIfIdle re-arms it per drain).
         drain.reset()
         resumeCursorAtFetchStart = 0
@@ -1557,7 +1572,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         driver?.stop()
         driver = nil
         reassembler.reset()
-        wearTracker.reset(); loggedWearState = nil
+        wearTracker.reset(); loggedWearState = nil; lastLivePulseAt = nil
         writeCharacteristic = nil
         loggedFirstHR = false
         droppedFirstLiveHR = false

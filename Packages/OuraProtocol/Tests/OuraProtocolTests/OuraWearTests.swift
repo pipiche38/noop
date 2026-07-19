@@ -112,4 +112,21 @@ final class OuraWearTests: XCTestCase {
         t.reset()
         XCTAssertEqual(t.current, .unknown)
     }
+
+    func testLivePulseTimeoutDowngradesWornToOff() {
+        // The ring emits no "removed" event; a silent live-HR stream is the only signal. A timeout
+        // downgrades worn -> off, but must NOT override charging or fabricate a not-worn from unknown.
+        let t = OuraWearTracker()
+        t.noteLivePulseTimeout()
+        XCTAssertEqual(t.current, .unknown)            // no evidence yet -> unchanged
+        t.notePulse()
+        XCTAssertEqual(t.current, .worn)
+        t.noteLivePulseTimeout()                       // stream went quiet -> removed
+        XCTAssertEqual(t.current, .off)
+        // charging is authoritative: a timeout never flips it to off.
+        t.note(state: state(9, "chg. detected"))
+        XCTAssertEqual(t.current, .charging)
+        t.noteLivePulseTimeout()
+        XCTAssertEqual(t.current, .charging)
+    }
 }
