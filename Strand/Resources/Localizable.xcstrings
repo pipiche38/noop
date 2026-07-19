@@ -167158,6 +167158,28 @@
           }
         }
       }
+    },
+    "No new nights from your strap for %lld days. Check it's connected and saving data.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seit %lld Tagen keine neuen Nächte von deinem Strap. Prüfe, ob er verbunden ist und Daten speichert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sin nuevas noches de tu strap desde hace %lld días. Comprueba que esté conectado y guardando datos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune nouvelle nuit de votre strap depuis %lld jours. Vérifiez qu'il est connecté et enregistre les données."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
