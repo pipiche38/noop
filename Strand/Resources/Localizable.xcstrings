@@ -53028,6 +53028,50 @@
         }
       }
     },
+    "This stops recording and saves what's captured so far. It can't be resumed.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das beendet die Aufzeichnung und speichert, was bisher erfasst wurde. Das lässt sich nicht fortsetzen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esto detiene la grabación y guarda lo registrado hasta ahora. No se puede reanudar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cela arrête l'enregistrement et sauvegarde ce qui a été capturé jusqu'à présent. Impossible de le reprendre."
+          }
+        }
+      }
+    },
+    "End this workout?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workout beenden?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Finalizar entrenamiento?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminer l'entraînement ?"
+          }
+        }
+      }
+    },
     "End workout": {
       "localizations": {
         "de": {
