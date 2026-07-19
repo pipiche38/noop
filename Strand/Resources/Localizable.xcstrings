@@ -1,6 +1,314 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%.2f V": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%.2f V"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%.2f V"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%.2f V"
+          }
+        }
+      }
+    },
+    "Battery voltage %.2f volts": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akkuspannung %.2f Volt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voltaje de batería %.2f voltios"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tension batterie %.2f volts"
+          }
+        }
+      }
+    },
+    "Battery-info probe (#592 RE)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akku-Info-Test (#592 RE)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonda de info de batería (#592 RE)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonde d'info batterie (#592 RE)"
+          }
+        }
+      }
+    },
+    "Battery-info probe (#592 RE)…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akku-Info-Test (#592 RE)…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonda de info de batería (#592 RE)…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonde d'info batterie (#592 RE)…"
+          }
+        }
+      }
+    },
+    "Battery-info probe result (#592)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ergebnis des Akku-Info-Tests (#592)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resultado de la sonda de info de batería (#592)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Résultat de la sonde d'info batterie (#592)"
+          }
+        }
+      }
+    },
+    "Send probe (read-only)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Test senden (nur lesen)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviar sonda (solo lectura)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoyer la sonde (lecture seule)"
+          }
+        }
+      }
+    },
+    "Waiting for the strap's reply…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warte auf die Antwort des Bands…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esperando la respuesta de la banda…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente de la réponse du bracelet…"
+          }
+        }
+      }
+    },
+    "Two independent protocol tables disagree on the extended-battery opcode (98 vs 87). This sends the curated read-only 98 and shows the strap's full raw reply. A battery-style payload confirms 98 on your firmware; a short stub means it stays ambiguous. Nothing is written to the strap.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zwei unabhängige Protokolltabellen widersprechen sich beim Extended-Battery-Opcode (98 vs. 87). Dies sendet das kuratierte, nur lesende 98 und zeigt die vollständige Rohantwort des Bands. Eine batterieartige Nutzlast bestätigt 98 auf deiner Firmware; ein kurzer Stub bleibt mehrdeutig. Es wird nichts auf das Band geschrieben."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dos tablas de protocolo independientes discrepan sobre el opcode de batería extendida (98 vs 87). Esto envía el 98 curado y de solo lectura y muestra la respuesta cruda completa de la banda. Una carga tipo batería confirma 98 en tu firmware; un stub corto lo deja ambiguo. No se escribe nada en la banda."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deux tables de protocole indépendantes divergent sur l'opcode de batterie étendue (98 contre 87). Ceci envoie le 98 curé en lecture seule et affiche la réponse brute complète du bracelet. Une charge de type batterie confirme 98 sur votre firmware ; un stub court le laisse ambigu. Rien n'est écrit sur le bracelet."
+          }
+        }
+      }
+    },
+    "Optimal strain reached": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optimale Anstrengung erreicht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esfuerzo óptimo alcanzado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effort optimal atteint"
+          }
+        }
+      }
+    },
+    "You've hit today's optimal strain target of %lld. Nice work — your recovery earned it.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du hast dein heutiges optimales Anstrengungsziel von %lld erreicht. Stark — deine Erholung hat es ermöglicht."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Has alcanzado tu objetivo de esfuerzo óptimo de hoy de %lld. Bien hecho: tu recuperación se lo ha ganado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous avez atteint votre objectif d'effort optimal du jour de %lld. Bravo — votre récupération l'a permis."
+          }
+        }
+      }
+    },
+    "Strain target": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anstrengungsziel"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Objetivo de esfuerzo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Objectif d'effort"
+          }
+        }
+      }
+    },
+    "A once-a-day nudge when your Effort reaches the low end of today's optimal strain range, worked out from your recovery.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einmal täglich ein Hinweis, wenn deine Anstrengung das untere Ende des heutigen optimalen Bereichs erreicht, berechnet aus deiner Erholung."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un aviso una vez al día cuando tu esfuerzo alcanza el extremo inferior del rango óptimo de hoy, calculado a partir de tu recuperación."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un rappel une fois par jour lorsque votre effort atteint le bas de la plage optimale du jour, calculée à partir de votre récupération."
+          }
+        }
+      }
+    },
+    "Notify when optimal strain is reached": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Benachrichtigen, wenn die optimale Anstrengung erreicht ist"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notificar cuando se alcance el esfuerzo óptimo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifier lorsque l'effort optimal est atteint"
+          }
+        }
+      }
+    },
+    "Posts after your strap syncs and NOOP scores the day — not the exact second you cross it. At most once per day.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erscheint, nachdem dein Band synchronisiert hat und NOOP den Tag bewertet hat — nicht in der exakten Sekunde des Überschreitens. Höchstens einmal pro Tag."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aparece después de que tu banda sincroniza y NOOP puntúa el día — no en el segundo exacto en que lo cruzas. Como máximo una vez al día."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apparaît après la synchronisation de votre bracelet et le calcul du jour par NOOP — pas à la seconde exacte du franchissement. Au plus une fois par jour."
+          }
+        }
+      }
+    },
     "Night": {
       "localizations": {
         "de": {
@@ -6828,9 +7136,33 @@
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld дней"
+          "variations": {
+            "plural": {
+              "few": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld дня"
+                }
+              },
+              "many": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld дней"
+                }
+              },
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld день"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld дней"
+                }
+              }
+            }
           }
         },
         "zh-Hans": {
@@ -7859,9 +8191,33 @@
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld маркеров"
+          "variations": {
+            "plural": {
+              "few": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld маркера"
+                }
+              },
+              "many": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld маркеров"
+                }
+              },
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld маркер"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld маркеров"
+                }
+              }
+            }
           }
         },
         "zh-Hans": {
@@ -9882,9 +10238,33 @@
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld сессий"
+          "variations": {
+            "plural": {
+              "few": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld сессии"
+                }
+              },
+              "many": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld сессий"
+                }
+              },
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld сессия"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld сессий"
+                }
+              }
+            }
           }
         },
         "zh-Hans": {
@@ -10421,9 +10801,33 @@
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld недель назад"
+          "variations": {
+            "plural": {
+              "few": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld недели назад"
+                }
+              },
+              "many": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld недель назад"
+                }
+              },
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld неделю назад"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld недель назад"
+                }
+              }
+            }
           }
         },
         "zh-Hans": {
