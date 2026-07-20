@@ -71,9 +71,9 @@ public final class LiveState: ObservableObject {
     @Published public var charging: Bool? = nil
 
     /// The Oura ring's current wear/charge state (nil for non-Oura straps or before any evidence this
-    /// session). Driven by OuraLiveSource from the ring's STATE charger strings + IBI (pulse) presence:
-    /// a pulse only comes from a finger (`.worn`); "chg. detected"/"stopped" bracket `.charging`. Lets the
-    /// UI show worn/charging and lets the sleep path tell a real night from a charger-staged phantom.
+    /// session). Driven by OuraLiveSource from the live-HR push + the ring's STATE charger strings: a live
+    /// beat only comes from a finger (`.worn`); "chg. detected"/"stopped" bracket `.charging`; a silent
+    /// live-HR stream drops to `.off` (removed). Lets the Live view show On wrist / Off wrist.
     @Published public var ouraWearState: OuraWearState? = nil
 
     // MARK: - Battery runtime estimate (#713)

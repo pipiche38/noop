@@ -274,6 +274,9 @@ fun TodayScreen(
     // The liquid header battery ring taps through to Devices (iOS parity: the battery ring → router.openDevices()).
     // Defaulted to fall back to Settings so the call site stays compiling; AppRoot binds it to the Devices route.
     onOpenDevices: () -> Unit = onOpenSettings,
+    // The #627 journal-reminder card links straight to the journal (Insights). Defaulted to a no-op so
+    // the call site stays compiling; AppRoot binds it to nav.navigateTopLevel(Insights), same as Sleep.
+    onOpenJournal: () -> Unit = {},
 ) {
     val today by viewModel.today.collectAsStateWithLifecycle()
     val alert by viewModel.healthAlert.collectAsStateWithLifecycle()
@@ -626,6 +629,10 @@ fun TodayScreen(
     var showLiveSession by remember { mutableStateOf(false) }
     val liveSessionsEnabled = remember { LiveSessionPrefs.enabled(context) }
     val activeLiveSession by LiveSessionRunner.active.collectAsStateWithLifecycle()
+    // The journal widget's own opt-out (default ON). Read here too so its reorderable section emits no
+    // item when disabled — an always-present zero-height slot would leave a blank draggable gap. Same
+    // remember-once idiom the card uses; a resume/recompose re-reads it. (#656)
+    val journalReminderOn = remember { NoopPrefs.journalReminderEnabled(context) }
     // S4: the Synthesis card collapses to a one-liner that expands on tap (default collapsed). Mirrors iOS.
     var synthesisExpanded by remember { mutableStateOf(false) }
     // S5: the Key Metrics grid caps at the first METRICS_COLLAPSED_CAP tiles behind a "Show all metrics"
@@ -1324,6 +1331,8 @@ fun TodayScreen(
                     selectedDayOffset == 0 && (liveSessionsEnabled || activeLiveSession != null)
                 TodaySection.YOUR_CARDS ->
                     selectedDayOffset == 0 && visibleDashboardCards.isNotEmpty()
+                TodaySection.JOURNAL ->
+                    selectedDayOffset == 0 && journalReminderOn
                 else -> true
             }
             if (!sectionVisible) return@forEach
@@ -1521,6 +1530,15 @@ fun TodayScreen(
                             onOpenSleep = onOpenSleep,
                             onOpenCoupled = onOpenCoupled,
                             onCustomise = { showDashboardEditor = true },
+                        )
+                        // #656: the persistent journal widget (last-7-days strip + tap-through). Now a
+                        // reorderable section like the others — hold-drag or Arrange moves it. Today-only
+                        // and enabled-gated at the loop level (sectionVisible) so it never leaves a blank
+                        // draggable slot. Twin of iOS LiquidTodayView's `.journal` arm.
+                        TodaySection.JOURNAL -> JournalReminderCard(
+                            viewModel = viewModel,
+                            days = days,
+                            onOpenJournal = onOpenJournal,
                         )
                     }
                 }

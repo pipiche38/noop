@@ -162,7 +162,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Live wear/charge indicator: a LIVE-HR push (.hr) means the ring is on a finger; the ring's own "chg.
     /// detected"/"stopped" STATE strings bracket a charging period. Fed ONLY from the live push and STATE
     /// (never a banked .ibi, which can be a past-night re-serve) and only while `feedsLive`. Mirrored to
-    /// `live.ouraWearState` for the UI + sleep gate.
+    /// `live.ouraWearState` for the On-wrist / Off-wrist UI.
     private let wearTracker = OuraWearTracker()
     private var loggedWearState: OuraWearState?
     /// When the last LIVE-HR beat arrived. If the stream goes quiet for `wornPulseTimeout` while we are

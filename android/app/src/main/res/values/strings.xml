@@ -1346,6 +1346,13 @@
     <string name="l10n_insights_screen_rest_b79e5f48">Rest</string>
     <string name="l10n_insights_screen_rhr_04edf9b3">RHR</string>
     <string name="l10n_journal_log_journal_57d7f743">Journal</string>
+    <string name="l10n_journal_reminder_log_today_s_journal_cb33be3e">Log today\'s journal</string>
+    <string name="l10n_journal_reminder_open_journal_bbd88cc1">Open journal</string>
+    <string name="l10n_journal_reminder_journal_reminder_0fdc0d9c">Journal reminder</string>
+    <string name="l10n_journal_reminder_show_a_today_card_reminding_you_to_log_your_journal_8228bc77">Show a Today card reminding you to log your journal</string>
+    <string name="l10n_journal_reminder_journal_57d7f743">Journal</string>
+    <string name="l10n_journal_reminder_logged_today_0071a46c">Logged today</string>
+    <string name="l10n_journal_reminder_tap_a_day_to_catch_up_10d16728">Tap a day to catch up</string>
     <string name="l10n_liquid_primitives_liquidpressalpha_2c4048a8">liquidPressAlpha</string>
     <string name="l10n_liquid_primitives_liquidpressscale_7520ddb3">liquidPressScale</string>
     <string name="l10n_live_screen_avg_cdc93143">Avg</string>
@@ -1699,4 +1706,9 @@
         <item quantity="one">%1$d workout</item>
         <item quantity="other">%1$d workouts</item>
     </plurals>
+    <string name="timeline_spo2_not_on_whoop5">This strap doesn\'t send SpO₂ over Bluetooth. Import a WHOOP export or Health Connect to see it.</string>
+    <string name="timeline_resp_not_on_whoop5">This strap sends no raw respiration stream. Your estimated respiratory rate appears on the Health screen.</string>
+    <string name="l10n_data_sources_screen_last_shared_6bf8389c">"Last shared "</string>
+    <string name="l10n_data_sources_screen_sharing_paused_health_connect_permission_was_e8950315">Sharing paused — Health Connect permission was revoked. Tap to re-grant.</string>
+    <string name="l10n_data_sources_screen_last_share_didn_t_finish_noop_0d6c27f0">Last share didn’t finish — NOOP will retry automatically.</string>
 </resources>
