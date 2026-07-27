@@ -1487,6 +1487,18 @@ public enum SleepStager {
     static let rsaMinBreathIntervalS = 2.5   // 24 bpm
     static let rsaMaxBreathIntervalS = 10.0  // 6 bpm
 
+    /// Beat-accuracy gate for RSA (see `respRateFromRR`). RSA is a FREQUENCY-domain method: it recovers
+    /// the ~0.2–0.3 Hz breathing oscillation from beat TIMING, so it needs a per-beat-accurate R-R stream
+    /// (each row's wall-clock gap ≈ its own R-R value). Time-domain HRV (RMSSD) is order-only and does NOT
+    /// need this. A banked/batched stream — e.g. an Oura ring's OVERNIGHT IBI, which stamps many beats at
+    /// one coarse ring-time (validated: only ~2% of beats are time-accurate, 25 k beats packed into a 3.5 h
+    /// timestamp span vs a 7.9 h R-R sum) — cannot support RSA; the tachogram's time axis is corrupted and
+    /// the estimate collapses to a confidently-wrong ~7–10 bpm. So gate: a beat is "time-accurate" when its
+    /// wall-clock gap matches its R-R value within `beatAccuracyToleranceS`; if fewer than
+    /// `beatAccuracyMinFraction` of beats qualify, return NaN (honest no-data) instead of a bad number.
+    static let beatAccuracyToleranceS = 0.5
+    static let beatAccuracyMinFraction = 0.5
+
     /// THE canonical plausible sleeping-respiratory-rate band (bpm). The RSA peak-pick below can
     /// yield 6–8 bpm at its noise floor, but every consumer (illness/readiness gates) only acts on
     /// 8–25 — so respRateFromRR clamps its output to this band (NaN outside it) and the stored
@@ -1537,6 +1549,28 @@ public enum SleepStager {
         let inBedRows = rr.filter { $0.ts >= start && $0.ts <= end }
             .sortedByTsStable()
             .filter { Double($0.rrMs) >= HRVAnalyzer.rrMinMs && Double($0.rrMs) <= HRVAnalyzer.rrMaxMs }
+
+        // Beat-accuracy gate (#882/#883): RSA needs per-beat-accurate TIMING - each row's wall-clock gap
+        // must be ≈ its own R-R value. A banked/batched stream (an Oura overnight IBI stamps many beats at
+        // one coarse ring-time) fails this and yields a confidently-wrong ~7-10 bpm; return NaN instead.
+        // Beat-accurate callers (WHOOP R-R, the synthetic RSA fixtures) are ~100% accurate and pass
+        // unchanged. Needs a few beats to judge; below that the count gate below handles it.
+        //
+        // DISTINCT FROM #977's splice skip below, and BOTH are needed - they catch opposite clock faults:
+        // #977 handles a DROPOUT (the wall clock OUTRAN the beats, so the cumulative sum stitches two
+        // sides together) by skipping the affected windows; this handles a BATCH (the wall clock STALLED
+        // while many beats were stamped at one time), where no individual window looks spliced but every
+        // reconstructed beat time is fiction, so no window is salvageable and the whole estimate is void.
+        // Runs on the range-filtered rows so an out-of-range R-R cannot fail the accuracy test spuriously.
+        if inBedRows.count >= 30 {
+            var accurate = 0
+            for i in 1..<inBedRows.count {
+                let gapS = Double(inBedRows[i].ts - inBedRows[i - 1].ts)
+                if abs(gapS - Double(inBedRows[i].rrMs) / 1000.0) <= beatAccuracyToleranceS { accurate += 1 }
+            }
+            if Double(accurate) / Double(inBedRows.count - 1) < beatAccuracyMinFraction { return nan }
+        }
+
         let filtered = inBedRows.map { Double($0.rrMs) }
         if filtered.count < 30 { return nan }  // need enough beats for any RSA estimate
 
