@@ -1585,6 +1585,16 @@ object SleepStager {
     private const val rsaMinBreathIntervalS: Double = 2.5  // 24 bpm
     private const val rsaMaxBreathIntervalS: Double = 10.0 // 6 bpm
 
+    // Beat-accuracy gate for RSA (see respRateFromRR). RSA is a FREQUENCY-domain method: it recovers the
+    // ~0.2–0.3 Hz breathing oscillation from beat TIMING, so it needs a per-beat-accurate R-R stream (each
+    // row's wall-clock gap ≈ its own R-R value). Time-domain HRV (RMSSD) is order-only and does NOT need
+    // this. A banked/batched stream — an Oura overnight IBI stamps many beats at one coarse ring-time
+    // (validated: only ~2% of beats are time-accurate) — cannot support RSA; the estimate collapses to a
+    // confidently-wrong ~7–10 bpm. Gate: if fewer than beatAccuracyMinFraction of beats have a wall-clock
+    // gap within beatAccuracyToleranceS of their R-R value, return NaN. Byte-identical twin of Swift.
+    private const val beatAccuracyToleranceS: Double = 0.5
+    private const val beatAccuracyMinFraction: Double = 0.5
+
     /**
      * THE canonical plausible sleeping-respiratory-rate band (bpm). The RSA peak-pick above can yield
      * 6–8 bpm at its noise floor, but every consumer (ReadinessEngine illness/readiness) only acts on
@@ -1639,6 +1649,29 @@ object SleepStager {
             .sortedBy { it.ts }
             .filter { it.rrMs.toDouble() >= HrvAnalyzer.RR_MIN_MS && it.rrMs.toDouble() <= HrvAnalyzer.RR_MAX_MS }
             .toList()
+
+        // Beat-accuracy gate (#882/#883): RSA needs per-beat-accurate TIMING - each row's wall-clock gap
+        // must be ≈ its own R-R value. A banked/batched stream (an Oura overnight IBI stamps many beats at
+        // one coarse ring-time) fails this and yields a confidently-wrong ~7-10 bpm; return NaN instead.
+        // Beat-accurate callers (WHOOP R-R, the synthetic RSA fixtures) are ~100% accurate and pass
+        // unchanged. Needs a few beats to judge; below that the count gate below handles it.
+        //
+        // DISTINCT FROM #977's splice skip below, and BOTH are needed - they catch opposite clock faults:
+        // #977 handles a DROPOUT (the wall clock OUTRAN the beats, so the cumulative sum stitches two
+        // sides together) by skipping the affected windows; this handles a BATCH (the wall clock STALLED
+        // while many beats were stamped at one time), where no individual window looks spliced but every
+        // reconstructed beat time is fiction, so no window is salvageable and the whole estimate is void.
+        // Runs on the range-filtered rows so an out-of-range R-R cannot fail the accuracy test spuriously.
+        // Byte-identical twin of the Swift gate.
+        if (inBedRows.size >= 30) {
+            var accurate = 0
+            for (i in 1 until inBedRows.size) {
+                val gapS = (inBedRows[i].ts - inBedRows[i - 1].ts).toDouble()
+                if (kotlin.math.abs(gapS - inBedRows[i].rrMs.toDouble() / 1000.0) <= beatAccuracyToleranceS) accurate++
+            }
+            if (accurate.toDouble() / (inBedRows.size - 1).toDouble() < beatAccuracyMinFraction) return nan
+        }
+
         val filtered = inBedRows.map { it.rrMs.toDouble() }
         if (filtered.size < 30) return nan // need enough beats for any RSA estimate
 
