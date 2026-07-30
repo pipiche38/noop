@@ -620,6 +620,14 @@ public final class LiveState: ObservableObject {
         (UserDefaults.standard.array(forKey: tailKey) as? [String]) ?? []
     }
 
+    /// TEMPORARY test-branch marker (`test/oura-sleep-hrv-combined`) — hardcoded so an exported strap log
+    /// can be matched to the exact source commit it was built from. This branch's Oura decoders (0x81
+    /// CVA-PPG, 0x7E/0x7F real-steps, …) move faster than `MARKETING_VERSION` bumps, so the version string
+    /// alone can't tell an export apart from a same-numbered build off `main`. Bump the hash before each
+    /// build/export on this branch (`git rev-parse --short=8 HEAD`); delete this whole property + its two
+    /// call sites before this branch merges to `main` — it must never ship.
+    nonisolated static let testBranchMarker = "Branch: test/oura-sleep-hrv-combined @ 62b15c6a"
+
     /// A shareable strap-log body sourced from the DURABLE tail, for a background / scheduled export that
     /// runs with no live `LiveState` instance. Mirrors `exportableLogText()`'s header so a scheduled drop
     /// reads the same as a manual share; falls back to the live `log` is not available here by design
@@ -633,6 +641,7 @@ public final class LiveState: ObservableObject {
         #endif
         var header = "NOOP strap log (scheduled export) — \(osName)\nApp: \(v)\n\(osName): "
             + ProcessInfo.processInfo.operatingSystemVersionString + "\n"
+        header += testBranchMarker + "\n"
         if !extraHeaderLines.isEmpty { header += extraHeaderLines.joined(separator: "\n") + "\n" }
         header += String(repeating: "-", count: 40) + "\n"
         return header + persistedLogTail().joined(separator: "\n")
@@ -676,6 +685,7 @@ public final class LiveState: ObservableObject {
         #endif
         var header = "NOOP strap log - \(osName)\nApp: \(v)\n\(osName): "
             + ProcessInfo.processInfo.operatingSystemVersionString + "\n"
+        header += Self.testBranchMarker + "\n"
         #if os(iOS)
         let diagLines = IOSDiagnostics.capture().summaryLines()
         if !diagLines.isEmpty { header += diagLines.joined(separator: "\n") + "\n" }
