@@ -83,13 +83,16 @@ public enum OuraEventTag: UInt8, Sendable, CaseIterable, Codable {
     // --- Smoothed SpO2 (Tier B, UNVERIFIED) ---
     case spo2Smoothed     = 0x70   // spo2_smoothed, OURA_PROTOCOL.md s6.6 (UNVERIFIED)
 
+    // --- Raw PPG (Tier B, UNVERIFIED) ---
+    case cvaRawPpg        = 0x81   // cva_raw_ppg_data (delta + 24-bit absolute), OURA_PROTOCOL.md s6.14 (UNVERIFIED)
+
     /// The trust tier for this tag. Tier B tags are decoded but the OuraDriver gates their emission
     /// behind an explicit allowTierB flag. Per OURA_PROTOCOL.md s7.3 and the brief's TIER DISCIPLINE.
     public var tier: TrustTier {
         switch self {
         case .sleepSummary1, .sleepSummaryC, .sleepSummaryD, .sleepSummaryE,
              .sleepSummaryF, .activityInfo, .activitySummary1, .activitySummary2,
-             .realSteps1, .realSteps2, .spo2Smoothed,
+             .realSteps1, .realSteps2, .spo2Smoothed, .cvaRawPpg,
              // 0x6A sleep_period_info: the field NAMES come from a single decompiled-binary source
              // ([open_ring]); NOOP's own captures confirm the layout's declared invariants and the
              // fixed-point scales. Tier B on DECODE PROVENANCE — third-party names, not Oura
@@ -147,6 +150,7 @@ public enum OuraEventTag: UInt8, Sendable, CaseIterable, Codable {
         case .realSteps1: return "REAL_STEPS_1"
         case .realSteps2: return "REAL_STEPS_2"
         case .spo2Smoothed: return "SPO2_SMOOTHED"
+        case .cvaRawPpg: return "CVA_RAW_PPG"
         }
     }
 }
