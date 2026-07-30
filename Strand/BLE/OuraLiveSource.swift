@@ -297,6 +297,10 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Append-only JSONL research corpus for the reconstructed 0x81 CVA raw-PPG series (Tier-B, third-party
     /// [open_ring] formula, never scored/persisted to SQLite). See OuraCvaPpgDump.
     private let cvaPpgDump: OuraCvaPpgDump?
+
+    /// Append-only JSONL research corpus for the SpO2 stream (Tier-A, already persisted to `spo2Sample` -
+    /// this sidecar exists for the raw→% calibration investigation, see OuraSpO2Dump).
+    private let spo2Dump: OuraSpO2Dump?
     /// Append-only JSONL capture of the RAW, undecoded history-drain notification bytes (`oura-raw-<id>.jsonl`).
     /// Complement to the decoded sidecars above: those show what NOOP interpreted, this shows exactly what the
     /// ring sent, so after a full connect a hole in a decoded file can be pinned as a decode drop vs ring-side.
@@ -632,6 +636,10 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         guard let driver, driver.phase == .fetchingHistory else { return }
         if let next = drain.continuationCursor(lastRequestCursor: lastRequestCursor) {
             lastRequestCursor = next
+            // Commit any SpO2 group still buffered from this batch (OuraSpO2Dump groups same-ringTs
+            // samples into one line; without this the batch's last record would sit unflushed until the
+            // next SpO2 record arrives, which might be hours away).
+            spo2Dump?.flush()
             log("Oura: history batch done - continuing from cursor \(next) [\(describeCursor(next))]")
             advance(.historyCursorAdvanced(cursor: next, moreData: true))
         } else {
@@ -649,6 +657,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private func finishDrain(completed: Bool, resumeBacklog: Bool) {
         pendingContinuation = false
         stopBatchQuietTimer()
+        spo2Dump?.flush()
         if let burst = hypnogramAssembler.flush() {
             persistHypnogramBurst(burst)
         }
@@ -1081,6 +1090,8 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         self.rawDump = feedsLive && !deviceId.isEmpty ? OuraRawDump(deviceId: deviceId, log: log) : nil
         // 0x7E/0x7F real_steps research corpus: same gate as the other Tier-B dumps.
         self.realStepsDump = feedsLive && !deviceId.isEmpty ? OuraRealStepsDump(deviceId: deviceId, log: log) : nil
+        // SpO2 raw→% calibration research corpus: same gate as the other dumps.
+        self.spo2Dump = feedsLive && !deviceId.isEmpty ? OuraSpO2Dump(deviceId: deviceId, log: log) : nil
         super.init()
         // Dedicated queue-less central -> callbacks arrive on the main queue, matching @MainActor.
         #if os(iOS)
@@ -1719,6 +1730,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 if let ts = driver.unixSeconds(forRingTimestamp: s.ringTimestamp) {
                     enqueue([e], ts: ts)
                     noteStoredHistoryRingTime(s.ringTimestamp)
+                    spo2Dump?.record(ringTs: s.ringTimestamp, utc: ts, value: s.value, unit: s.unit)
                 } else {
                     pendingAnchorEvents.append((e, s.ringTimestamp))
                 }

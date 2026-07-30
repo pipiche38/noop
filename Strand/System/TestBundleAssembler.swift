@@ -20,7 +20,9 @@ enum TestBundleAssembler {
     /// picked up everywhere instead of silently missing the export bundle. (Landed after `cva-ppg` and
     /// `real-steps` shipped their writers but not their kind entry — both wrote real files on-device that
     /// the bundler's hardcoded 3-kind list then dropped from every export.)
-    static let ouraSidecarKinds: [String] = ["raw", "ibihr", "activity", "cva-ppg", "motion", "real-steps"]
+    static let ouraSidecarKinds: [String] = [
+        "raw", "ibihr", "activity", "cva-ppg", "motion", "real-steps", "spo2",
+    ]
 
     /// The bundle files that may be trimmed to fit the cap (newest-tail kept). The strap-log tail and
     /// meta.json are already bounded, so only these raw research streams can blow the budget: the WHOOP
