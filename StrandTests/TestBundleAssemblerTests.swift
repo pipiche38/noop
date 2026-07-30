@@ -71,6 +71,8 @@ final class TestBundleAssemblerTests: XCTestCase {
             forFile: "oura-motion-oura-2H3B2405003655.jsonl"), "oura-motion.jsonl")
         XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
             forFile: "oura-real-steps-oura-2H3B2405003655.jsonl"), "oura-real-steps.jsonl")
+        XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
+            forFile: "oura-spo2-oura-2H3B2405003655.jsonl"), "oura-spo2.jsonl")
         // Non-sidecar files are ignored.
         XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(forFile: "raw-capture.jsonl"))
         XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(forFile: "whoop.sqlite"))
