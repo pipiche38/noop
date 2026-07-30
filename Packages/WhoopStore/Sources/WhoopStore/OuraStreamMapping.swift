@@ -238,14 +238,14 @@ public enum OuraStreamMapping {
                                            unit: OuraRespScale.unitTag))
 
             case .motion, .state, .timeSync, .rtcBeacon, .debugText, .tierB, .activityInfo,
-                 .realStepsFields:
+                 .realStepsFields, .cvaRawPpg:
                 // Not a durable per-device stream row (timeSync/rtcBeacon anchor the transport's clock;
-                // motion/state/debug are diagnostics; Tier-B / .activityInfo / .realStepsFields are
-                // UNVERIFIED and must never feed scoring or the steps stream). In particular the 0x50
-                // activity/MET decode NEVER mints a `steps` row: the formula is third-party and
-                // unvalidated, and MET is not a step count — fabricating one would break the honest-data
-                // invariant. Nor may .realStepsFields mint one: ground truth showed no field is a count,
-                // they are the inputs to Oura's step model (see OuraRealStepsFields).
+                // motion/state/debug are diagnostics; Tier-B / .activityInfo / .realStepsFields /
+                // .cvaRawPpg are UNVERIFIED and must never feed scoring or the steps stream). In
+                // particular the 0x50 activity/MET decode NEVER mints a `steps` row: the formula is
+                // third-party and unvalidated, and MET is not a step count — fabricating one would break
+                // the honest-data invariant. Nor may .realStepsFields mint one: ground truth showed no
+                // field is a count, they are the inputs to Oura's step model (see OuraRealStepsFields).
                 //
                 // `.sleepPeriodInfo` used to be dropped here too. It is now mapped above, to ONE stream
                 // and one field: `breath` → `resp`. Its `averageHrBpm` is still refused, for the reason

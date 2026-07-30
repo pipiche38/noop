@@ -208,13 +208,13 @@ object OuraStreamMapping {
                     out.events.add(WhoopEvent(ts = ts, kind = EVENT_MOTION, payload = payload))
                 }
 
-                // Motion / state / time-sync / rtc / debug / TierB / ActivityInfo / RealStepsFields never
-                // map onto a scored stream. In particular the 0x50 activity/MET decode (PR #960) NEVER
-                // mints a `steps` row: the formula is third-party and unvalidated (Tier B, OURA_PROTOCOL.md
-                // s6.13), and MET is not a step count - fabricating one would break the honest-data
-                // invariant and the per-source day-owner rules. Same discipline for 0x7E/0x7F real_steps
-                // (s6.13) - decoded, logged, never scored: ground truth showed no field is a step count,
-                // they are the inputs to Oura's step model.
+                // Motion / state / time-sync / rtc / debug / TierB / ActivityInfo / RealStepsFields /
+                // CvaRawPpg never map onto a scored stream. In particular the 0x50 activity/MET decode
+                // (PR #960) NEVER mints a `steps` row: the formula is third-party and unvalidated (Tier B,
+                // OURA_PROTOCOL.md s6.13), and MET is not a step count - fabricating one would break the
+                // honest-data invariant and the per-source day-owner rules. Same discipline for 0x7E/0x7F
+                // real_steps (s6.13) - decoded, logged, never scored: ground truth showed no field is a
+                // step count, they are the inputs to Oura's step model - and for 0x81 CVA raw PPG (s6.14).
                 is OuraEvent.SleepPeriodInfo -> {
                     // 0x6A `breath` -> a `respSample` row under the RING's deviceId, and on a ring night
                     // that row set supplies the SCORED `dailyMetric.respRateBpm`
@@ -261,14 +261,17 @@ object OuraStreamMapping {
                     )
                 }
 
-                // Motion / state / time-sync / rtc / debug / TierB / ActivityInfo never map onto a
-                // scored stream. In particular the 0x50 activity/MET decode (PR #960) NEVER mints a
-                // `steps` row: the formula is third-party and unvalidated (Tier B, OURA_PROTOCOL.md
-                // s6.13), and MET is not a step count - fabricating one would break the honest-data
-                // invariant and the per-source day-owner rules. 0x6A used to be dropped here too; it is
-                // now mapped above, to ONE stream and one field. Its `averageHrBpm` is still refused,
-                // for the reason that kept the whole record out - it would join the beat-derived HR
-                // series at a different cadence and a different provenance.
+                // Motion / state / time-sync / rtc / debug / TierB / ActivityInfo / RealStepsFields /
+                // CvaRawPpg never map onto a scored stream. In particular the 0x50 activity/MET decode
+                // (PR #960) NEVER mints a `steps` row: the formula is third-party and unvalidated (Tier B,
+                // OURA_PROTOCOL.md s6.13), and MET is not a step count - fabricating one would break the
+                // honest-data invariant and the per-source day-owner rules. 0x6A used to be dropped here
+                // too; it is now mapped above, to ONE stream and one field. Its `averageHrBpm` is still
+                // refused, for the reason that kept the whole record out - it would join the beat-derived
+                // HR series at a different cadence and a different provenance. Same discipline for
+                // 0x7E/0x7F real_steps (s6.13) - decoded, logged, never scored: ground truth showed no
+                // field is a step count, they are the inputs to Oura's step model - and for 0x81 CVA raw
+                // PPG (s6.14).
                 else -> Unit
             }
         }

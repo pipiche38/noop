@@ -371,6 +371,11 @@ class OuraStreamMappingTest {
                 OuraEvent.RealStepsFields(
                     com.noop.oura.OuraRealStepsFields(tag = 0x7E, ringTimestamp = 100, fields = (0..13).toList()),
                 ),
+                // 0x81 CVA raw PPG: decoded but Tier-B/unvalidated (third-party [open_ring] formula) -
+                // must never leak a value into a durable stream either.
+                OuraEvent.CvaRawPpg(
+                    com.noop.oura.OuraCvaPpg(ringTimestamp = 100, values = listOf(395015, 394873)),
+                ),
             ),
             anchor,
         )

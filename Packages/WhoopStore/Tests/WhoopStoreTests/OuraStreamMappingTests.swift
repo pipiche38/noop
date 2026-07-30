@@ -261,6 +261,9 @@ final class OuraStreamMappingTests: XCTestCase {
             // 0x7E/0x7F real_steps_features: decoded but Tier-B - must never mint a `steps` row either.
             // Ground truth showed no field is a count; they are model inputs (see OuraRealStepsFields).
             .realStepsFields(OuraRealStepsFields(tag: 0x7E, ringTimestamp: 100, fields: Array(0..<14))),
+            // 0x81 CVA raw PPG: decoded but Tier-B/unvalidated (third-party [open_ring] formula) - must
+            // never leak a value into a durable stream either.
+            .cvaRawPpg(OuraCvaPpg(ringTimestamp: 100, values: [395015, 394873])),
         ], at: ts)
         XCTAssertTrue(s.isEmpty, "Tier-B and diagnostic events must not produce any durable stream row")
         XCTAssertTrue(s.steps.isEmpty, "activity/MET/real_steps must never fabricate a steps row")
