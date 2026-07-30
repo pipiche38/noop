@@ -86,7 +86,10 @@ enum class OuraEventTag(val raw: Int) {
     REAL_STEPS_2(0x7F),       // real_steps_features_2, OURA_PROTOCOL.md s6.13 (UNVERIFIED)
 
     // --- Smoothed SpO2 (Tier B, UNVERIFIED) ---
-    SPO2_SMOOTHED(0x70);      // spo2_smoothed, OURA_PROTOCOL.md s6.6 (UNVERIFIED)
+    SPO2_SMOOTHED(0x70),      // spo2_smoothed, OURA_PROTOCOL.md s6.6 (UNVERIFIED)
+
+    // --- Raw PPG (Tier B, UNVERIFIED) ---
+    CVA_RAW_PPG(0x81);        // cva_raw_ppg_data (delta + 24-bit absolute), OURA_PROTOCOL.md s6.14 (UNVERIFIED)
 
     /**
      * The trust tier for this tag. Tier B tags are decoded but the OuraDriver gates their emission
@@ -96,7 +99,7 @@ enum class OuraEventTag(val raw: Int) {
         get() = when (this) {
             SLEEP_SUMMARY_1, SLEEP_SUMMARY_C, SLEEP_SUMMARY_D, SLEEP_SUMMARY_E,
             SLEEP_SUMMARY_F, ACTIVITY_INFO, ACTIVITY_SUMMARY_1, ACTIVITY_SUMMARY_2,
-            REAL_STEPS_1, REAL_STEPS_2, SPO2_SMOOTHED,
+            REAL_STEPS_1, REAL_STEPS_2, SPO2_SMOOTHED, CVA_RAW_PPG,
             // 0x6A sleep_period_info: the field NAMES come from a single decompiled-binary source
             // ([open_ring]); NOOP's own captures confirm the layout's declared invariants and the
             // fixed-point scales. Tier B on DECODE PROVENANCE - third-party names, not Oura
@@ -151,6 +154,7 @@ enum class OuraEventTag(val raw: Int) {
             REAL_STEPS_1 -> "REAL_STEPS_1"
             REAL_STEPS_2 -> "REAL_STEPS_2"
             SPO2_SMOOTHED -> "SPO2_SMOOTHED"
+            CVA_RAW_PPG -> "CVA_RAW_PPG"
         }
 
     companion object {
