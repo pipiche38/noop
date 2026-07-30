@@ -350,6 +350,11 @@ class OuraStreamMappingTest {
                 OuraEvent.CvaRawPpg(
                     com.noop.oura.OuraCvaPpg(ringTimestamp = 100, values = listOf(395015, 394873)),
                 ),
+                // 0x7E/0x7F real_steps_features: decoded but Tier-B/unvalidated - must never mint a
+                // `steps` row either, even from its leading candidate field.
+                OuraEvent.RealStepsFields(
+                    com.noop.oura.OuraRealStepsFields(tag = 0x7E, ringTimestamp = 100, fields = (0..13).toList()),
+                ),
             ),
             anchor,
         )

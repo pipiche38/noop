@@ -176,10 +176,13 @@ public enum OuraStreamMapping {
                 if let hi = m.highIntensity { payload["high_intensity"] = .int(hi) }
                 out.events.append(WhoopEvent(ts: ts, kind: motionEventKind, payload: payload))
 
-            case .motion, .state, .timeSync, .rtcBeacon, .debugText, .tierB, .activityInfo, .cvaRawPpg:
+            case .motion, .state, .timeSync, .rtcBeacon, .debugText, .tierB, .activityInfo, .cvaRawPpg,
+                 .realStepsFields:
                 // Not a durable per-device stream row (timeSync/rtcBeacon anchor the transport's clock;
-                // motion/state/debug are diagnostics; Tier-B / .activityInfo / .cvaRawPpg are UNVERIFIED
-                // and must never feed scoring or the steps stream).
+                // motion/state/debug are diagnostics; Tier-B / .activityInfo / .cvaRawPpg /
+                // .realStepsFields are UNVERIFIED and must never feed scoring or the steps stream - in
+                // particular .realStepsFields must never mint a `steps` row on its own, even for its
+                // leading candidate field; see OuraRealStepsFields).
                 continue
             }
         }
