@@ -56,13 +56,21 @@ final class TestBundleAssemblerTests: XCTestCase {
     // MARK: - Oura diagnostics attachment (#Test-Centre Oura sidecars)
 
     func testNormalizedOuraEntryNameDropsRingId() {
-        // The three sidecars normalize to id-free names; the ring UUID is gone from the filename.
+        // All six sidecars normalize to id-free names; the ring UUID is gone from the filename.
         XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
             forFile: "oura-raw-5C4C0BF8-2DF6-1B3A-18D0-3DF0B3590148.jsonl"), "oura-raw.jsonl")
         XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
             forFile: "oura-ibihr-5C4C0BF8-2DF6-1B3A-18D0-3DF0B3590148.jsonl"), "oura-ibihr.jsonl")
         XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
             forFile: "oura-activity-oura-5C4C0BF8.jsonl"), "oura-activity.jsonl")
+        // #Test-Centre follow-up: cva-ppg/motion/real-steps shipped writers (Strand/BLE/Oura*Dump.swift)
+        // before the bundler knew their kind — regression coverage for that gap.
+        XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
+            forFile: "oura-cva-ppg-oura-2H3B2405003655.jsonl"), "oura-cva-ppg.jsonl")
+        XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
+            forFile: "oura-motion-oura-2H3B2405003655.jsonl"), "oura-motion.jsonl")
+        XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
+            forFile: "oura-real-steps-oura-2H3B2405003655.jsonl"), "oura-real-steps.jsonl")
         // Non-sidecar files are ignored.
         XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(forFile: "raw-capture.jsonl"))
         XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(forFile: "whoop.sqlite"))
@@ -72,8 +80,9 @@ final class TestBundleAssemblerTests: XCTestCase {
     func testNormalizedOuraNamesAreAllTrimmable() {
         // Every normalized sidecar name must be in the cap's trimmable set, else a big night's dump could
         // blow the 20 MB cap instead of being tail-trimmed.
-        for kind in ["raw", "ibihr", "activity"] {
+        for kind in TestBundleAssembler.ouraSidecarKinds {
             XCTAssertTrue(TestBundleAssembler.trimmableNames.contains("oura-\(kind).jsonl"))
+            XCTAssertTrue(TestBundleAssembler.ouraSidecarNames.contains("oura-\(kind).jsonl"))
         }
     }
 
