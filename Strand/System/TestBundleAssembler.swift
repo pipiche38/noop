@@ -14,14 +14,20 @@ enum TestBundleAssembler {
     /// The redaction stamp written into meta.json so a maintainer knows the whole-bundle scrub ran.
     static let redactionVersion = "v2"
 
+    /// The Oura Diagnostics-dir sidecar kinds the bundle attaches — the SINGLE source of truth
+    /// `normalizedOuraEntryName`/`ouraDiagnosticEntries`/`trimmableNames`/`ouraSidecarNames` all derive
+    /// from, so a new dump writer (`Strand/BLE/Oura*Dump.swift`) needs exactly one line added here to be
+    /// picked up everywhere instead of silently missing the export bundle. (Landed after `cva-ppg` and
+    /// `real-steps` shipped their writers but not their kind entry — both wrote real files on-device that
+    /// the bundler's hardcoded 3-kind list then dropped from every export.)
+    static let ouraSidecarKinds: [String] = ["raw", "ibihr", "activity", "cva-ppg", "motion", "real-steps"]
+
     /// The bundle files that may be trimmed to fit the cap (newest-tail kept). The strap-log tail and
     /// meta.json are already bounded, so only these raw research streams can blow the budget: the WHOOP
-    /// frame capture plus the Oura ring's Tier-B JSONL sidecars (raw notifications / IBI-HR / activity MET).
-    /// Everything NOT listed here is kept whole and its bytes are reserved before the trimmable group is
-    /// given the remainder. These are the NORMALIZED entry names (the ring id is dropped from the filename).
-    static let trimmableNames: Set<String> = [
-        "raw-capture.jsonl", "oura-raw.jsonl", "oura-ibihr.jsonl", "oura-activity.jsonl",
-    ]
+    /// frame capture plus the Oura ring's Tier-B JSONL sidecars (raw notifications / IBI-HR / activity MET /
+    /// CVA-PPG / motion / real-steps). Everything NOT listed here is kept whole and its bytes are reserved
+    /// before the trimmable group is given the remainder. NORMALIZED entry names (ring id dropped).
+    static let trimmableNames: Set<String> = Set(["raw-capture.jsonl"] + ouraSidecarKinds.map { "oura-\($0).jsonl" })
 
     /// #572 follow-up: the Oura Tier-B sidecars carry the ring id in a `"deviceId"` JSON field. The
     /// whole-bundle UUID scrub (`LiveState.redactPii`) masks it only when it is a CANONICAL dashed
@@ -30,9 +36,7 @@ enum TestBundleAssembler {
     /// covered, and (unlike broadening the UUID regex to dashless hex) it CANNOT touch the raw `hex` capture
     /// field, which a greedier rule would shred. Scoped to the sidecars so a non-PII logical `deviceId`
     /// (e.g. "my-whoop") elsewhere in the bundle stays readable. NORMALIZED names (ring id already dropped).
-    static let ouraSidecarNames: Set<String> = [
-        "oura-raw.jsonl", "oura-ibihr.jsonl", "oura-activity.jsonl",
-    ]
+    static let ouraSidecarNames: Set<String> = Set(ouraSidecarKinds.map { "oura-\($0).jsonl" })
 
     /// Re-run the redaction sink over every entry. Text entries are decoded as UTF-8, scrubbed via the same
     /// LiveState.redactPii used by the live sink, and re-encoded. A non-UTF-8 entry (none today) passes
@@ -281,11 +285,12 @@ enum TestBundleAssembler {
     }
 
     /// Map a diagnostics filename to a NORMALIZED bundle entry name that drops the ring id, or nil when the
-    /// file is not one of the three Oura sidecars. `oura-<type>-<ringId>.jsonl` → `oura-<type>.jsonl`, which
-    /// (a) keeps the ring id out of the bundle's filenames (redaction scrubs content, never names) and
-    /// (b) lands on the `trimmableNames` set so the cap can trim it. Pure/string-only for unit testing.
+    /// file is not one of the Oura sidecars in `ouraSidecarKinds`. `oura-<type>-<ringId>.jsonl` →
+    /// `oura-<type>.jsonl`, which (a) keeps the ring id out of the bundle's filenames (redaction scrubs
+    /// content, never names) and (b) lands on the `trimmableNames` set so the cap can trim it.
+    /// Pure/string-only for unit testing.
     static func normalizedOuraEntryName(forFile filename: String) -> String? {
-        for kind in ["raw", "ibihr", "activity"] {
+        for kind in ouraSidecarKinds {
             if filename.hasPrefix("oura-\(kind)-"), filename.hasSuffix(".jsonl") {
                 return "oura-\(kind).jsonl"
             }
@@ -309,8 +314,8 @@ enum TestBundleAssembler {
             if let existing = byName[name], existing.data.count >= entry.data.count { continue }
             byName[name] = entry
         }
-        // Stable order (raw, ibihr, activity) so the bundle listing is deterministic.
-        return ["oura-raw.jsonl", "oura-ibihr.jsonl", "oura-activity.jsonl"].compactMap { byName[$0] }
+        // Stable order (ouraSidecarKinds order) so the bundle listing is deterministic.
+        return ouraSidecarKinds.map { "oura-\($0).jsonl" }.compactMap { byName[$0] }
     }
 
     /// The on-disk path a crash report would live at, when a crash handler is wired. There is no producer
