@@ -45,10 +45,12 @@ public enum OuraStreamMapping {
     ///   - `.hr`         (0x55 live-HR push)            → `hr:[HRSample]`
     ///   - `.ibi`        (0x44/0x60 IBI)                → `rr:[RRInterval]`
     ///   - `.hrv`        (0x5D HRV tag, u8 hr/rmssd pairs) → `events:[WhoopEvent(kind: OURA_HRV)]` (one row per 5-min bucket)
-    ///   - `.spo2`       (0x6F/0x70/0x77)              → `spo2:[SpO2Sample]`, carrying the decoder's own
+    ///   - `.spo2`       (0x6F/0x70 ONLY)              → `spo2:[SpO2Sample]`, carrying the decoder's own
     ///     `unit` tag. NOT all one quantity: 0x6F/0x70 are firmware-computed PERCENTAGES (tagged `"raw"`,
     ///     a legacy channel label — see `OuraDecoders.decodeSpO2PerSample`), while 0x77 is a genuine raw
-    ///     DC channel tagged `"dc_raw"`. Both land in `SpO2Sample.red`; neither is written to `spo2Pct`.
+    ///     DC channel tagged `"dc_raw"` on a wholly different scale. **0x77 is decoded but NOT persisted**
+    ///     — it is filtered at the guard below, because blending two scales into one `red` column corrupts
+    ///     any consumer that averages the stream without a unit filter. Nothing is written to `spo2Pct`.
     ///   - `.temp`       (0x46/0x75)                    → `skinTemp:[SkinTempSample(raw_adc)]`
     ///   - `.sleepPhase` (0x4E/0x5A 2-bit codes)        → `events:[WhoopEvent(kind: OURA_SLEEP_PHASE)]`
     ///   - `.battery`                                   → `battery:[BatterySample]`
@@ -117,11 +119,21 @@ public enum OuraStreamMapping {
                 ]))
 
             case .spo2(let v):
-                // Oura reports a single SpO2 channel; `SpO2Sample` is the WHOOP-shaped two-channel raw row,
-                // so we record the decoded value on `red` and leave `ir` at 0 (no second channel). `unit`
-                // carries the decoder's own scale tag ("raw"/"dc_raw") so downstream never assumes a %.
+                // Only persist the 0x6F/0x7B channel (`unit == "raw"`): a real overnight capture
+                // (2026-07-30/31, 22516 samples) clusters tightly at 95-105, matching a genuine %SpO2
+                // reading (the decoder's own #968 note). The 0x77 DC channel (`unit == "dc_raw"`) is a
+                // wildly different-scale raw PPG/perfusion signal (-9K to +11.7M in the same capture) -
+                // not SpO2 at all, so blending it into `red` would corrupt any consumer that averages the
+                // stream with no unit filter (e.g. AnalyticsEngine.nightlySpo2RawMeans). Still decoded and
+                // available via the OuraSpO2Dump research sidecar (both units); just never durably
+                // persisted. `SpO2Sample` is the WHOOP-shaped two-channel raw row, so we record the
+                // decoded value on `red` and leave `ir` at 0 (no second channel).
+                guard v.unit == "raw" else { continue }
+
+                // `unit` still travels onto the row (always "raw" past the guard) so downstream never
+                // assumes a %.
                 //
-                // Each sample gets its OWN second. `spo2Sample` is keyed (deviceId, ts), so the 13 samples
+                // Each surviving sample gets its OWN second. `spo2Sample` is keyed (deviceId, ts), so the 13 samples
                 // of one 0x6F record written at the record's single `ts` collided and only the first
                 // survived — 92% of an overnight silently discarded, and unrecoverable because the ring
                 // trims its banked history once the offload is acked (#1070). The samples are one per
