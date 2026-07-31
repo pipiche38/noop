@@ -650,37 +650,56 @@ class OuraDriverTest {
     @Test
     fun testCvaRawPPGDecodesRealCaptureChain() {
         // Record 0: three back-to-back absolute anchors, then a split marker (payload offset 12) with
-        // only one trailing byte - decoding honestly stops there instead of guessing into record 1.
+        // only one trailing byte - the leftover bytes (0x80 0x03) are carried forward as pendingOut
+        // instead of dropped (fixed 2026-07-31, @vishk23 PR #968 review: dropping them fabricated
+        // spurious samples and rarely misread the dropped marker byte as a real anchor's high byte,
+        // producing a spurious sample >= 2^23 - the "4 unexplained anomalies" the original validation
+        // left open; carrying them forward instead took a real capture's anomaly count from 4 to 0).
         val rec0 = OuraRecord(type = OuraEventTag.CVA_RAW_PPG.raw, ringTimestamp = 3_584_349,
                               payload = bytes("800707068079060680b705068003"))
         val step0 = OuraDecoders.decodeCvaRawPPG(rec0, null)
         assertEquals(listOf(395015, 394873, 394679), step0?.values)
         assertEquals(394679, step0?.runningOut)
+        assertEquals(listOf(0x80, 0x03), step0?.pendingOut)
 
-        // Record 1 continues the chain from record 0's running total (no anchor of its own).
+        // Record 1 continues the chain from record 0's running total AND its 2 pending bytes: the
+        // pending 0x80 0x03 completes into ONE more anchor (394499) that the old per-record decode
+        // fabricated as two spurious +5/+6 deltas instead (and lost the real anchor value entirely).
         val rec1 = OuraRecord(type = OuraEventTag.CVA_RAW_PPG.raw, ringTimestamp = 3_584_350,
                               payload = bytes("0506804604068090030680f00206"))
-        val step1 = OuraDecoders.decodeCvaRawPPG(rec1, step0?.runningOut)
-        assertEquals(listOf(394684, 394690, 394310, 394128, 393968), step1?.values)
+        val step1 = OuraDecoders.decodeCvaRawPPG(rec1, step0?.runningOut, step0?.pendingOut ?: emptyList())
+        assertEquals(listOf(394499, 394310, 394128, 393968), step1?.values)
         assertEquals(393968, step1?.runningOut)
+        assertEquals(emptyList<Int>(), step1?.pendingOut)
 
-        // Record 2 continues from record 1.
+        // Record 2 continues from record 1, no pending bytes carried in.
         val rec2 = OuraRecord(type = OuraEventTag.CVA_RAW_PPG.raw, ringTimestamp = 3_584_351,
                               payload = bytes("80300206809b0106800a010694ab"))
-        val step2 = OuraDecoders.decodeCvaRawPPG(rec2, step1?.runningOut)
+        val step2 = OuraDecoders.decodeCvaRawPPG(rec2, step1?.runningOut, step1?.pendingOut ?: emptyList())
         assertEquals(listOf(393776, 393627, 393482, 393374, 393289), step2?.values)
         assertEquals(393289, step2?.runningOut)
+
+        // The full continuous series across all 3 records, monotonically descending - @vishk23's
+        // predicted golden fixture (PR #968 review, 2026-07-30): a stronger assertion than per-record
+        // values alone because the monotonicity is itself the check.
+        val full = (step0?.values ?: emptyList()) + (step1?.values ?: emptyList()) + (step2?.values ?: emptyList())
+        assertEquals(
+            listOf(395015, 394873, 394679, 394499, 394310, 394128, 393968, 393776, 393627, 393482, 393374, 393289),
+            full,
+        )
     }
 
     @Test
-    fun testCvaRawPPGSplitMarkerStopsHonestly() {
-        // Same record 0 as above, decoded standalone (runningIn: null): the trailing split marker at
-        // payload offset 12 (only 1 of the needed 3 trailing bytes present) must not be guessed across
-        // into the next notification - decoding stops there and returns only the 3 clean samples.
+    fun testCvaRawPPGSplitMarkerCarriesLeftoverBytesForward() {
+        // Same record 0 as above, decoded standalone (runningIn: null, pendingIn: emptyList()): the
+        // trailing split marker at payload offset 12 (only 1 of the needed 3 trailing bytes present) is
+        // carried forward as pendingOut for the caller to prepend to the NEXT record - the 0x81 sample
+        // stream is CONTINUOUS across records. The 3 samples that decoded cleanly are still returned.
         val rec = OuraRecord(type = OuraEventTag.CVA_RAW_PPG.raw, ringTimestamp = 3_584_349,
                              payload = bytes("800707068079060680b705068003"))
         val step = OuraDecoders.decodeCvaRawPPG(rec, null)
         assertEquals(listOf(395015, 394873, 394679), step?.values)
+        assertEquals(listOf(0x80, 0x03), step?.pendingOut)
     }
 
     @Test
@@ -701,7 +720,7 @@ class OuraDriverTest {
         assertEquals(
             listOf<OuraEvent>(
                 OuraEvent.CvaRawPpg(
-                    OuraCvaPpg(ringTimestamp = 3_584_350, values = listOf(394684, 394690, 394310, 394128, 393968)),
+                    OuraCvaPpg(ringTimestamp = 3_584_350, values = listOf(394499, 394310, 394128, 393968)),
                 ),
             ),
             events1,
@@ -730,6 +749,26 @@ class OuraDriverTest {
     }
 
     @Test
+    fun testCvaRawPPGGapResetsPendingBytesToo() {
+        val d = OuraDriver(ringGen = OuraRingGen.GEN3, authKey = key, allowTierB = true)
+        // A bare split marker (no trailing bytes at all) leaves pending = [0x80] in the driver's
+        // session state; nothing is decodable yet, so no event is emitted this round.
+        val rec0 = OuraRecord(type = OuraEventTag.CVA_RAW_PPG.raw, ringTimestamp = 1000, payload = intArrayOf(0x80))
+        assertEquals(emptyList<OuraEvent>(), d.ingest(rec0))
+
+        // A gap past the reset window must drop the pending marker too, not just the running total -
+        // else a stale marker byte from a PRIOR session would silently complete into a fabricated
+        // anchor here. Without the pending reset this decodes as ONE absolute-anchor sample (0); with
+        // it, THREE plain zero-deltas - a strong enough difference to catch a regression.
+        val rec1 = OuraRecord(type = OuraEventTag.CVA_RAW_PPG.raw, ringTimestamp = 1601,
+                              payload = intArrayOf(0x00, 0x00, 0x00))
+        assertEquals(
+            listOf<OuraEvent>(OuraEvent.CvaRawPpg(OuraCvaPpg(ringTimestamp = 1601, values = listOf(0, 0, 0)))),
+            d.ingest(rec1),
+        )
+    }
+
+    @Test
     fun testRealStepsFields0x7FYields12Fields0x7EYields14() {
         // 0x7F drops fields 12/13 rather than zero-filling them: they would read past the 14-byte body,
         // and a fabricated zero is indistinguishable from a real one (honest-data invariant).
@@ -753,6 +792,24 @@ class OuraDriverTest {
         val fields = OuraDecoders.decodeRealStepsFields(rec)?.fields
         assertEquals("0xFF<<1 | carry(1) - the carry must come from record byte 5, not byte 3", 511, fields?.get(0))
         assertEquals("block byte 3 (record byte 5) = 0x80, & 0x7f = 0", 0, fields?.get(3))
+    }
+
+    @Test
+    fun testCvaRawPPGRingStartResetsPendingBytesToo() {
+        val d = OuraDriver(ringGen = OuraRingGen.GEN3, authKey = key, allowTierB = true)
+        val rec0 = OuraRecord(type = OuraEventTag.CVA_RAW_PPG.raw, ringTimestamp = 1000, payload = intArrayOf(0x80))
+        assertEquals(emptyList<OuraEvent>(), d.ingest(rec0))
+
+        // A 0x41 ring_start_ind (well within the gap window) must invalidate the pending marker too.
+        val ringStart = OuraRecord(type = OuraEventTag.RING_START.raw, ringTimestamp = 1010, payload = intArrayOf())
+        assertEquals(emptyList<OuraEvent>(), d.ingest(ringStart))
+
+        val rec1 = OuraRecord(type = OuraEventTag.CVA_RAW_PPG.raw, ringTimestamp = 1020,
+                              payload = intArrayOf(0x00, 0x00, 0x00))
+        assertEquals(
+            listOf<OuraEvent>(OuraEvent.CvaRawPpg(OuraCvaPpg(ringTimestamp = 1020, values = listOf(0, 0, 0)))),
+            d.ingest(rec1),
+        )
     }
 
     @Test

@@ -138,6 +138,16 @@ class OuraDriver(
     private var cvaPpgLastRingTimestamp: Long? = null
 
     /**
+     * 1-3 leftover bytes (a `0x80` marker plus 0-2 partial trailing bytes) from the END of the last
+     * 0x81 record's payload, when it split a LE u24 anchor across the record boundary. The sample
+     * stream is CONTINUOUS across 0x81 records - carrying these bytes into the next record's payload
+     * instead of dropping them fixes the ~1-in-4-records phase break that produced spurious samples and
+     * the rare `>= 2^23` anchor misreads. Diagnosed by @vishk23 (PR #968 review, 2026-07-30). Cleared
+     * alongside [cvaPpgRunning] (60 s gap / RING_START / [stop]). Kotlin twin of Swift's cvaPpgPending.
+     */
+    private var cvaPpgPending: List<Int> = emptyList()
+
+    /**
      * The key the auth handshake should use: the freshly-installed key takes precedence over the
      * injected one (so re-auth after a key install uses the new key). Per OURA_PROTOCOL.md s3.2.
      */
@@ -306,6 +316,7 @@ class OuraDriver(
         anchorRingTime = null
         cvaPpgRunning = null
         cvaPpgLastRingTimestamp = null
+        cvaPpgPending = emptyList()
     }
 
     // MARK: - Ring-time -> UTC anchor (s5.5)
@@ -487,6 +498,7 @@ class OuraDriver(
                 // survives a real ring reboot.
                 cvaPpgRunning = null
                 cvaPpgLastRingTimestamp = null
+                cvaPpgPending = emptyList()
                 emptyList()
             }
 
@@ -570,16 +582,24 @@ class OuraDriver(
                 // plausible decode formula (OuraDecoders.decodeCvaRawPPG, third-party [open_ring]). Still
                 // Tier B - only reached behind allowTierB (gated above), and OuraStreamMapping never folds
                 // CvaRawPpg into a durable stream. A 60 s gap (or a ring-reset, s6.14) invalidates the
-                // running total BEFORE this record is decoded, so a stale accumulator never leaks across a
-                // real session break; an out-of-order re-serve (rt regression) is treated the same as a gap.
+                // running total AND the pending-byte carry BEFORE this record is decoded, so neither a
+                // stale accumulator nor stale leftover bytes leak across a real session break; an
+                // out-of-order re-serve (rt regression) is treated the same as a gap.
                 val last = cvaPpgLastRingTimestamp
                 if (last != null) {
                     val gap = if (record.ringTimestamp >= last) record.ringTimestamp - last else last - record.ringTimestamp
-                    if (gap > CVA_PPG_GAP_RESET_TICKS) cvaPpgRunning = null
+                    if (gap > CVA_PPG_GAP_RESET_TICKS) {
+                        cvaPpgRunning = null
+                        cvaPpgPending = emptyList()
+                    }
                 }
                 cvaPpgLastRingTimestamp = record.ringTimestamp
-                val step = OuraDecoders.decodeCvaRawPPG(record, cvaPpgRunning) ?: return emptyList()
+                val step = OuraDecoders.decodeCvaRawPPG(record, cvaPpgRunning, cvaPpgPending) ?: return emptyList()
                 cvaPpgRunning = step.runningOut
+                cvaPpgPending = step.pendingOut
+                // A record whose entire payload got absorbed into the pending carry (nothing decoded yet
+                // - the anchor split spans this record too) has no sample to report this round.
+                if (step.values.isEmpty()) return emptyList()
                 listOf(OuraEvent.CvaRawPpg(OuraCvaPpg(ringTimestamp = record.ringTimestamp, values = step.values)))
             }
         }
