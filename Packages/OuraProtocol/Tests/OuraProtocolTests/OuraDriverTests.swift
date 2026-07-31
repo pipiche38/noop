@@ -475,37 +475,57 @@ final class OuraDriverTests: XCTestCase {
 
     func testCvaRawPPGDecodesRealCaptureChain() {
         // Record 0: three back-to-back absolute anchors, then a split marker (payload offset 12) with
-        // only one trailing byte - decoding honestly stops there instead of guessing into record 1.
+        // only one trailing byte - the leftover bytes (0x80 0x03) are carried forward as pendingOut
+        // instead of dropped (fixed 2026-07-31, @vishk23 PR #968 review: dropping them fabricated
+        // spurious samples and rarely misread the dropped marker byte as a real anchor's high byte,
+        // producing a spurious sample >= 2^23 - the "4 unexplained anomalies" the original validation
+        // left open; carrying them forward instead took a real capture's anomaly count from 4 to 0).
         let rec0 = OuraRecord(type: OuraEventTag.cvaRawPpg.rawValue, ringTimestamp: 3_584_349,
                               payload: bytes("800707068079060680b705068003"))
-        let step0 = OuraDecoders.decodeCvaRawPPG(rec0, runningIn: nil)
+        let step0 = OuraDecoders.decodeCvaRawPPG(rec0, runningIn: nil, pendingIn: [])
         XCTAssertEqual(step0?.values, [395015, 394873, 394679])
         XCTAssertEqual(step0?.runningOut, 394679)
+        XCTAssertEqual(step0?.pendingOut, [0x80, 0x03])
 
-        // Record 1 continues the chain from record 0's running total (no anchor of its own).
+        // Record 1 continues the chain from record 0's running total AND its 2 pending bytes: the
+        // pending `0x80 0x03` completes into ONE more anchor (394499) that the old per-record decode
+        // fabricated as two spurious +5/+6 deltas instead (and lost the real anchor value entirely).
         let rec1 = OuraRecord(type: OuraEventTag.cvaRawPpg.rawValue, ringTimestamp: 3_584_350,
                               payload: bytes("0506804604068090030680f00206"))
-        let step1 = OuraDecoders.decodeCvaRawPPG(rec1, runningIn: step0?.runningOut)
-        XCTAssertEqual(step1?.values, [394684, 394690, 394310, 394128, 393968])
+        let step1 = OuraDecoders.decodeCvaRawPPG(rec1, runningIn: step0?.runningOut,
+                                                 pendingIn: step0?.pendingOut ?? [])
+        XCTAssertEqual(step1?.values, [394499, 394310, 394128, 393968])
         XCTAssertEqual(step1?.runningOut, 393968)
+        XCTAssertEqual(step1?.pendingOut, [])
 
-        // Record 2 continues from record 1.
+        // Record 2 continues from record 1, no pending bytes carried in.
         let rec2 = OuraRecord(type: OuraEventTag.cvaRawPpg.rawValue, ringTimestamp: 3_584_351,
                               payload: bytes("80300206809b0106800a010694ab"))
-        let step2 = OuraDecoders.decodeCvaRawPPG(rec2, runningIn: step1?.runningOut)
+        let step2 = OuraDecoders.decodeCvaRawPPG(rec2, runningIn: step1?.runningOut,
+                                                 pendingIn: step1?.pendingOut ?? [])
         XCTAssertEqual(step2?.values, [393776, 393627, 393482, 393374, 393289])
         XCTAssertEqual(step2?.runningOut, 393289)
+
+        // The full continuous series across all 3 records, monotonically descending - @vishk23's
+        // predicted golden fixture (PR #968 review, 2026-07-30): a stronger assertion than per-record
+        // values alone because the monotonicity is itself the check.
+        let full = (step0?.values ?? []) + (step1?.values ?? []) + (step2?.values ?? [])
+        XCTAssertEqual(full, [395015, 394873, 394679, 394499, 394310, 394128, 393968,
+                              393776, 393627, 393482, 393374, 393289])
     }
 
-    func testCvaRawPPGSplitMarkerStopsHonestly() {
-        // Same record 0 as above, decoded standalone (runningIn: nil): the trailing split marker at
-        // payload offset 12 (only 1 of the needed 3 trailing bytes present) must not be guessed across
-        // into the next notification (Framing.swift's one-packet-per-notification rule) - decoding stops
-        // there and returns only the 3 samples that decoded cleanly.
+    func testCvaRawPPGSplitMarkerCarriesLeftoverBytesForward() {
+        // Same record 0 as above, decoded standalone (runningIn: nil, pendingIn: []): the trailing split
+        // marker at payload offset 12 (only 1 of the needed 3 trailing bytes present) is carried forward
+        // as `pendingOut` for the caller to prepend to the NEXT record - the 0x81 sample stream is
+        // CONTINUOUS across records (Framing.swift already reassembles whole records before this layer
+        // runs), so this is session state to carry, not a notification boundary to stop at. The 3
+        // samples that decoded cleanly are still returned.
         let rec = OuraRecord(type: OuraEventTag.cvaRawPpg.rawValue, ringTimestamp: 3_584_349,
                              payload: bytes("800707068079060680b705068003"))
-        let step = OuraDecoders.decodeCvaRawPPG(rec, runningIn: nil)
+        let step = OuraDecoders.decodeCvaRawPPG(rec, runningIn: nil, pendingIn: [])
         XCTAssertEqual(step?.values, [395015, 394873, 394679])
+        XCTAssertEqual(step?.pendingOut, [0x80, 0x03])
     }
 
     func testCvaRawPPGThroughDriverChainsAcrossRecords() {
@@ -520,8 +540,38 @@ final class OuraDriverTests: XCTestCase {
         let events1 = d.ingest(record: rec1)
         XCTAssertEqual(events1,
             [.cvaRawPpg(OuraCvaPpg(ringTimestamp: 3_584_350,
-                                   values: [394684, 394690, 394310, 394128, 393968]))])
+                                   values: [394499, 394310, 394128, 393968]))])
         XCTAssertTrue(events1[0].isTierB, "cvaRawPpg must still report isTierB - the formula is UNVERIFIED")
+    }
+
+    func testCvaRawPPGGapResetsPendingBytesToo() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key, allowTierB: true)
+        // A bare split marker (no trailing bytes at all) leaves pending = [0x80] in the driver's
+        // session state; nothing is decodable yet, so no event is emitted this round.
+        let rec0 = OuraRecord(type: OuraEventTag.cvaRawPpg.rawValue, ringTimestamp: 1000, payload: [0x80])
+        XCTAssertEqual(d.ingest(record: rec0), [])
+
+        // A gap past the reset window must drop the pending marker too, not just the running total -
+        // else a stale marker byte from a PRIOR session would silently complete into a fabricated
+        // anchor here. Without the pending reset this decodes as ONE absolute-anchor sample (0); with
+        // it, THREE plain zero-deltas - a strong enough difference to catch a regression.
+        let rec1 = OuraRecord(type: OuraEventTag.cvaRawPpg.rawValue, ringTimestamp: 1601,
+                              payload: [0x00, 0x00, 0x00])
+        XCTAssertEqual(d.ingest(record: rec1), [.cvaRawPpg(OuraCvaPpg(ringTimestamp: 1601, values: [0, 0, 0]))])
+    }
+
+    func testCvaRawPPGRingStartResetsPendingBytesToo() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key, allowTierB: true)
+        let rec0 = OuraRecord(type: OuraEventTag.cvaRawPpg.rawValue, ringTimestamp: 1000, payload: [0x80])
+        XCTAssertEqual(d.ingest(record: rec0), [])
+
+        // A 0x41 ring_start_ind (well within the gap window) must invalidate the pending marker too.
+        let ringStart = OuraRecord(type: OuraEventTag.ringStart.rawValue, ringTimestamp: 1010, payload: [])
+        XCTAssertEqual(d.ingest(record: ringStart), [])
+
+        let rec1 = OuraRecord(type: OuraEventTag.cvaRawPpg.rawValue, ringTimestamp: 1020,
+                              payload: [0x00, 0x00, 0x00])
+        XCTAssertEqual(d.ingest(record: rec1), [.cvaRawPpg(OuraCvaPpg(ringTimestamp: 1020, values: [0, 0, 0]))])
     }
 
     func testCvaRawPPGGapResetsRunningTotal() {
