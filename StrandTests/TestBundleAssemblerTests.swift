@@ -46,6 +46,36 @@ final class TestBundleAssemblerTests: XCTestCase {
         XCTAssertEqual(raw.data.last, Data(oversized.utf8).last)
     }
 
+    func testCapSnapsTrimmedTailToLineBoundary() {
+        // A raw byte-count tail can (and in production did) land mid-record: a real export shipped
+        // oura-cva-ppg.jsonl/oura-real-steps.jsonl/oura-motion.jsonl each with a corrupted first line.
+        // Every trimmable name is newline-delimited JSONL, so the trimmed tail must always start at a
+        // clean line boundary.
+        let small = FileExport.BundleEntry(name: "report.txt", data: Data("small".utf8))
+        let lines = (1...2000).map { "{\"n\":\($0),\"pad\":\"\(String(repeating: "x", count: 50))\"}" }
+        let raw = FileExport.BundleEntry(name: "oura-raw.jsonl", data: Data(lines.joined(separator: "\n").utf8))
+        // Force a mid-file trim at a cap unlikely to land exactly on a newline.
+        let cap = raw.data.count / 2
+        let (capped, truncated) = TestBundleAssembler.capEntries([small, raw], capBytes: cap)
+        XCTAssertTrue(truncated)
+        let cappedRaw = capped.first { $0.name == "oura-raw.jsonl" }!
+        let text = String(data: cappedRaw.data, encoding: .utf8)!
+        XCTAssertFalse(text.isEmpty)
+        XCTAssertTrue(text.hasPrefix("{"), "trimmed tail must start at a clean line boundary, got: \(text.prefix(30))")
+        // Every kept line must still be valid JSON (no partial record survived).
+        for line in text.split(separator: "\n") {
+            XCTAssertNotNil(try? JSONSerialization.jsonObject(with: Data(line.utf8)),
+                            "corrupted line survived trimming: \(line.prefix(30))")
+        }
+    }
+
+    func testTrimToLineBoundaryHandlesNoNewline() {
+        // A single-line (or already-empty) entry has nothing to snap to - returned unchanged, never worse.
+        let noNewline = Data("no newline here".utf8)
+        XCTAssertEqual(TestBundleAssembler.trimToLineBoundary(noNewline), noNewline)
+        XCTAssertEqual(TestBundleAssembler.trimToLineBoundary(Data()), Data())
+    }
+
     func testCapLeavesUndersizedBundleUntouched() {
         let entries = [FileExport.BundleEntry(name: "report.txt", data: Data("tiny".utf8))]
         let (capped, truncated) = TestBundleAssembler.capEntries(entries, capBytes: 20 * 1024 * 1024)
