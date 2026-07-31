@@ -94,9 +94,16 @@ public enum OuraStreamMapping {
                 ]))
 
             case .spo2(let v):
-                // Oura reports a single SpO2 channel; `SpO2Sample` is the WHOOP-shaped two-channel raw row,
-                // so we record the decoded value on `red` and leave `ir` at 0 (no second channel). `unit`
-                // carries the decoder's own scale tag ("raw"/"dc_raw") so downstream never assumes a %.
+                // Only persist the 0x6F/0x7B channel (`unit == "raw"`): a real overnight capture
+                // (2026-07-30/31, 22516 samples) clusters tightly at 95-105, matching a genuine %SpO2
+                // reading (the decoder's own #968 note). The 0x77 DC channel (`unit == "dc_raw"`) is a
+                // wildly different-scale raw PPG/perfusion signal (-9K to +11.7M in the same capture) -
+                // not SpO2 at all, so blending it into `red` would corrupt any consumer that averages the
+                // stream with no unit filter (e.g. AnalyticsEngine.nightlySpo2RawMeans). Still decoded and
+                // available via the OuraSpO2Dump research sidecar (both units); just never durably
+                // persisted. `SpO2Sample` is the WHOOP-shaped two-channel raw row, so we record the
+                // decoded value on `red` and leave `ir` at 0 (no second channel).
+                guard v.unit == "raw" else { continue }
                 out.spo2.append(SpO2Sample(ts: ts, red: v.value, ir: 0, unit: v.unit))
 
             case .temp(let v):

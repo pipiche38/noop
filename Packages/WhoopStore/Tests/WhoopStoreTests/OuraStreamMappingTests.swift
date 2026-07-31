@@ -112,10 +112,20 @@ final class OuraStreamMappingTests: XCTestCase {
             .spo2(OuraSpO2(ringTimestamp: 100, value: 970, unit: "raw")),
             .spo2(OuraSpO2(ringTimestamp: 101, value: 12345, unit: "dc_raw")),
         ], at: ts)
-        XCTAssertEqual(s.spo2.map { $0.red }, [970, 12345])
-        XCTAssertEqual(s.spo2.map { $0.ir }, [0, 0])
-        XCTAssertEqual(s.spo2.map { $0.unit }, ["raw", "dc_raw"])
-        XCTAssertEqual(s.spo2.map { $0.ts }, [ts, ts])
+        // Only the "raw" 0x6F/0x7B channel persists: a real capture shows it clustering at 95-105
+        // (genuine %SpO2), while "dc_raw" (0x77) is a wildly different-scale raw PPG/perfusion signal
+        // (-9K to +11.7M) that would corrupt a blind mean over `red` if it were mixed in.
+        XCTAssertEqual(s.spo2.map { $0.red }, [970])
+        XCTAssertEqual(s.spo2.map { $0.ir }, [0])
+        XCTAssertEqual(s.spo2.map { $0.unit }, ["raw"])
+        XCTAssertEqual(s.spo2.map { $0.ts }, [ts])
+    }
+
+    func testSpO2DcRawChannelIsDroppedNotPersisted() {
+        let s = OuraStreamMapping.streams(from: [
+            .spo2(OuraSpO2(ringTimestamp: 100, value: 11_709_098, unit: "dc_raw")),
+        ], at: ts)
+        XCTAssertTrue(s.spo2.isEmpty)
     }
 
     // MARK: - Temp 0x46/0x75 -> skinTemp:[SkinTempSample] (centi-degree-C, parity with Kotlin)
