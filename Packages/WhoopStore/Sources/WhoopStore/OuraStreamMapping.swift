@@ -127,6 +127,16 @@ public enum OuraStreamMapping {
                 // `ON CONFLICT DO NOTHING`, so the survivor is the older record's last sample, which is
                 // the anchor-exact one; what is dropped is the newer record's most back-extrapolated
                 // sample. Sub-second timestamps would be needed to keep both, and the row key is seconds.
+                //
+                // Only persist the 0x6F/0x7B channel (`unit == "raw"`): a real overnight capture
+                // (2026-07-30/31, 22516 samples) clusters tightly at 95-105, matching a genuine %SpO2
+                // reading (the decoder's own #968 note). The 0x77 DC channel (`unit == "dc_raw"`) is a
+                // wildly different-scale raw PPG/perfusion signal (-9K to +11.7M in the same capture) -
+                // not SpO2 at all, so blending it into `red` would corrupt any consumer that averages the
+                // stream with no unit filter (e.g. AnalyticsEngine.nightlySpo2RawMeans). Still decoded and
+                // available via the OuraSpO2Dump research sidecar (both units); just never durably
+                // persisted.
+                guard v.unit == "raw" else { continue }
                 let sampleTs = ts - max(0, v.count - 1 - v.index)
                 out.spo2.append(SpO2Sample(ts: sampleTs, red: v.value, ir: 0, unit: v.unit))
 
