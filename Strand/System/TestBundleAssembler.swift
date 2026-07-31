@@ -86,10 +86,25 @@ enum TestBundleAssembler {
                 : 0
             guard entry.data.count > share else { return entry }
             truncated = true
-            // Keep the tail (most recent): the last `share` bytes.
-            return FileExport.BundleEntry(name: entry.name, data: Data(entry.data.suffix(share)))
+            // Keep the tail (most recent): the last `share` bytes, then snap forward to the next full
+            // JSONL line. A raw byte-count tail can (and in production did - a real export shipped
+            // oura-cva-ppg.jsonl/oura-real-steps.jsonl/oura-motion.jsonl each with a corrupted first
+            // line) land mid-record; every trimmable name is newline-delimited JSONL, so dropping the
+            // partial line at the front keeps every kept line honest.
+            return FileExport.BundleEntry(name: entry.name,
+                                          data: Self.trimToLineBoundary(entry.data.suffix(share)))
         }
         return (capped, truncated)
+    }
+
+    /// Drop bytes up to and including the first newline in `data`, so a raw byte-count tail (from
+    /// `capEntries`'s proportional trim) never starts mid-line for a newline-delimited JSONL sidecar.
+    /// Returns `data` unchanged when it contains no newline (a single very-long line, or already empty)
+    /// - never worse than the untrimmed behaviour, just not improved. Pure/testable.
+    static func trimToLineBoundary(_ data: Data) -> Data {
+        guard let newline = data.firstIndex(of: 0x0A) else { return data }
+        let start = data.index(after: newline)
+        return data.subdata(in: start..<data.endIndex)
     }
 
     // MARK: - assemble (the entrypoint behind the Report button, the Group D integration seam)
