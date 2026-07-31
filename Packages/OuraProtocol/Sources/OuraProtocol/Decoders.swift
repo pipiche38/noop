@@ -570,32 +570,44 @@ public enum OuraDecoders {
     // MARK: - CVA raw PPG, delta + 24-bit absolute anchor (0x81; s6.14) - Tier B, third-party formula
 
     /// Decode ONE `0x81` cva_raw_ppg_data record's delta/absolute-anchor byte stream into a running
-    /// sample series, given the running total carried in from the previous `0x81` record THIS SESSION
-    /// (`runningIn: nil` at session start or after a reset - see `OuraDriver`'s gap/ring-reset handling).
-    /// Formula (OURA_PROTOCOL.md s6.14, [open_ring], clean-room fact citation): byte `0x80` -> the next 3
-    /// bytes are a LE u24 ABSOLUTE value that re-syncs the running total; a byte with the MSB set
-    /// (`0x81`-`0xFF`) is a signed delta `byte - 0x100`; else (`0x00`-`0x7F`) a signed 7-bit delta
-    /// (`byte - 128` when `byte >= 64`, else `byte`) - both add onto the running total. `runningIn ?? 0`
-    /// starts the chain at 0 when no anchor has synced yet THIS session, the same non-guessing convention
-    /// `decodeSpO2DC` (0x77) already uses for its own delta-with-optional-base stream.
+    /// sample series, given the running total AND any leftover pending bytes carried in from the
+    /// previous `0x81` record THIS SESSION (`runningIn: nil` / `pendingIn: []` at session start or after
+    /// a reset - see `OuraDriver`'s gap/ring-reset handling). Formula (OURA_PROTOCOL.md s6.14, [open_ring],
+    /// clean-room fact citation): byte `0x80` -> the next 3 bytes are a LE u24 ABSOLUTE value that
+    /// re-syncs the running total; a byte with the MSB set (`0x81`-`0xFF`) is a signed delta
+    /// `byte - 0x100`; else (`0x00`-`0x7F`) a signed 7-bit delta (`byte - 128` when `byte >= 64`, else
+    /// `byte`) - both add onto the running total. `runningIn ?? 0` starts the chain at 0 when no anchor
+    /// has synced yet THIS session, the same non-guessing convention `decodeSpO2DC` (0x77) already uses
+    /// for its own delta-with-optional-base stream.
     ///
-    /// SPLIT MARKER (honest, not a bug): a `0x80` marker with fewer than 3 trailing bytes in THIS record
-    /// means the absolute value would span into the NEXT BLE notification. Per this codebase's
-    /// one-packet-per-notification / no-cross-notification-buffering rule (`Framing.swift`), decoding
-    /// stops at the marker rather than guessing bytes from a notification that has not arrived yet -
-    /// samples already decoded from earlier in the record are still returned. Returns nil when the
-    /// payload is empty or the marker split leaves nothing to return.
-    public static func decodeCvaRawPPG(_ rec: OuraRecord, runningIn: Int?) -> (values: [Int], runningOut: Int)? {
-        let b = rec.payload
-        guard !b.isEmpty else { return nil }
+    /// SPLIT MARKER, carried forward (fixed 2026-07-31, diagnosed by @vishk23 PR #968 review): the 0x81
+    /// sample stream is CONTINUOUS across records - `Framing.swift` already reassembles whole records
+    /// before this layer runs, so a `0x80` marker with fewer than 3 trailing bytes in THIS record is
+    /// session state to carry forward, not a notification boundary to stop at. Dropping those bytes (the
+    /// old behaviour) caused a phase break at ~1-in-4 record splits: 1-3 spurious samples per split, and
+    /// on the rarer case where the dropped marker byte's OWN value coincided with `0x80`, the next read
+    /// misinterpreted a real marker byte as the high byte of an anchor, producing a spurious sample
+    /// `>= 2^23` (8,388,608) - the "4 unexplained anomalies" the original validation left open. Verified
+    /// against a real capture: carrying the leftover bytes forward instead of dropping them took the
+    /// anomaly count from 4 to 0. `pendingOut` holds the 1-3 leftover bytes (the marker plus 0-2 partial
+    /// trailing bytes) when THIS record ends mid-anchor; the caller prepends it to the NEXT record's
+    /// payload. Returns nil only when there is truly nothing to do (both `pendingIn` and the payload are
+    /// empty).
+    public static func decodeCvaRawPPG(_ rec: OuraRecord, runningIn: Int?, pendingIn: [UInt8] = [])
+        -> (values: [Int], runningOut: Int, pendingOut: [UInt8])? {
+        let stream = pendingIn + rec.payload
+        guard !stream.isEmpty else { return nil }
         var running = runningIn ?? 0
         var out: [Int] = []
         var i = 0
-        while i < b.count {
-            let byte = Int(b[i])
+        while i < stream.count {
+            let byte = Int(stream[i])
             if byte == 0x80 {
-                guard i + 3 < b.count else { break }   // split marker across a notification boundary
-                running = u24le(b, i + 1)
+                guard i + 3 < stream.count else {
+                    // Carry the marker + any partial trailing bytes into the next record.
+                    return (out, running, Array(stream[i...]))
+                }
+                running = u24le(stream, i + 1)
                 out.append(running)
                 i += 4
             } else if byte & 0x80 != 0 {
@@ -608,7 +620,7 @@ public enum OuraDecoders {
                 i += 1
             }
         }
-        return out.isEmpty ? nil : (out, running)
+        return (out, running, [])
     }
 
     // MARK: - Real steps features (0x7E/0x7F; s6.13) - Tier B, third-party formula
