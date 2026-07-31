@@ -708,33 +708,43 @@ object OuraDecoders {
 
     /**
      * Decode ONE `0x81` cva_raw_ppg_data record's delta/absolute-anchor byte stream into a running
-     * sample series, given the running total carried in from the previous `0x81` record THIS SESSION
-     * (`runningIn: null` at session start or after a reset - see OuraDriver's gap/ring-reset handling).
-     * Formula (OURA_PROTOCOL.md s6.14, [open_ring], clean-room fact citation): byte `0x80` -> the next 3
-     * bytes are a LE u24 ABSOLUTE value that re-syncs the running total; a byte with the MSB set
-     * (`0x81`-`0xFF`) is a signed delta `byte - 0x100`; else (`0x00`-`0x7F`) a signed 7-bit delta
-     * (`byte - 128` when `byte >= 64`, else `byte`) - both add onto the running total. `runningIn ?: 0`
-     * starts the chain at 0 when no anchor has synced yet THIS session, the same non-guessing convention
-     * `decodeSpO2DC` (0x77) already uses for its own delta-with-optional-base stream.
+     * sample series, given the running total AND any leftover pending bytes carried in from the
+     * previous `0x81` record THIS SESSION (`runningIn: null` / `pendingIn: emptyList()` at session start
+     * or after a reset - see OuraDriver's gap/ring-reset handling). Formula (OURA_PROTOCOL.md s6.14,
+     * [open_ring], clean-room fact citation): byte `0x80` -> the next 3 bytes are a LE u24 ABSOLUTE value
+     * that re-syncs the running total; a byte with the MSB set (`0x81`-`0xFF`) is a signed delta
+     * `byte - 0x100`; else (`0x00`-`0x7F`) a signed 7-bit delta (`byte - 128` when `byte >= 64`, else
+     * `byte`) - both add onto the running total. `runningIn ?: 0` starts the chain at 0 when no anchor
+     * has synced yet THIS session, the same non-guessing convention `decodeSpO2DC` (0x77) already uses
+     * for its own delta-with-optional-base stream.
      *
-     * SPLIT MARKER (honest, not a bug): a `0x80` marker with fewer than 3 trailing bytes in THIS record
-     * means the absolute value would span into the NEXT BLE notification. Per this codebase's
-     * one-packet-per-notification / no-cross-notification-buffering rule, decoding stops at the marker
-     * rather than guessing bytes from a notification that has not arrived yet - samples already decoded
-     * from earlier in the record are still returned. Returns null when the payload is empty or the
-     * marker split leaves nothing to return. Byte-identical twin of Swift's `decodeCvaRawPPG`.
+     * SPLIT MARKER, carried forward (fixed 2026-07-31, diagnosed by @vishk23 PR #968 review): the 0x81
+     * sample stream is CONTINUOUS across records - whole records are already reassembled before this
+     * layer runs, so a `0x80` marker with fewer than 3 trailing bytes in THIS record is session state to
+     * carry forward, not a notification boundary to stop at. Dropping those bytes (the old behaviour)
+     * caused a phase break at ~1-in-4 record splits: 1-3 spurious samples per split, and on the rarer
+     * case where the dropped marker byte's OWN value coincided with `0x80`, the next read misinterpreted
+     * a real marker byte as the high byte of an anchor, producing a spurious sample `>= 2^23`
+     * (8,388,608). Verified against a real capture: carrying the leftover bytes forward instead of
+     * dropping them took the anomaly count from 4 to 0. `pendingOut` holds the 1-3 leftover bytes (the
+     * marker plus 0-2 partial trailing bytes) when THIS record ends mid-anchor; the caller prepends it
+     * to the NEXT record's payload. Returns null only when there is truly nothing to do (both `pendingIn`
+     * and the payload are empty). Byte-identical twin of Swift's `decodeCvaRawPPG`.
      */
-    fun decodeCvaRawPPG(rec: OuraRecord, runningIn: Int?): OuraCvaPpgDecodeStep? {
-        val b = rec.payload
-        if (b.isEmpty()) return null
+    fun decodeCvaRawPPG(rec: OuraRecord, runningIn: Int?, pendingIn: List<Int> = emptyList()): OuraCvaPpgDecodeStep? {
+        val stream = (pendingIn + rec.payload.toList()).toIntArray()
+        if (stream.isEmpty()) return null
         var running = runningIn ?: 0
         val out = ArrayList<Int>()
         var i = 0
-        while (i < b.size) {
-            val byte = b[i]
+        while (i < stream.size) {
+            val byte = stream[i]
             if (byte == 0x80) {
-                if (i + 3 >= b.size) break   // split marker across a notification boundary
-                running = u24le(b, i + 1)
+                if (i + 3 >= stream.size) {
+                    // Carry the marker + any partial trailing bytes into the next record.
+                    return OuraCvaPpgDecodeStep(out, running, stream.slice(i until stream.size))
+                }
+                running = u24le(stream, i + 1)
                 out.add(running)
                 i += 4
             } else if (byte and 0x80 != 0) {
@@ -747,7 +757,7 @@ object OuraDecoders {
                 i += 1
             }
         }
-        return if (out.isEmpty()) null else OuraCvaPpgDecodeStep(out, running)
+        return OuraCvaPpgDecodeStep(out, running, emptyList())
     }
 
     // MARK: - Real steps features (0x7E/0x7F; s6.13) - Tier B, third-party formula
@@ -785,4 +795,4 @@ object OuraDecoders {
  * The result of decoding one 0x81 record: the samples decoded from THIS record (in wire order) and the
  * running total to carry into the next record. Twin of the Swift `(values:runningOut:)` tuple return.
  */
-data class OuraCvaPpgDecodeStep(val values: List<Int>, val runningOut: Int)
+data class OuraCvaPpgDecodeStep(val values: List<Int>, val runningOut: Int, val pendingOut: List<Int>)
