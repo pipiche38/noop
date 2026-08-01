@@ -10,6 +10,7 @@
 - **[open_oura-r3]** - Th0rgal/open_oura `docs/horizon-ring3-protocol-cheatsheet.md` (no-license; Ring 3).
 - **[open_oura-r5]** - Th0rgal/open_oura `docs/ring-5-observations.md` (Ring 5).
 - **[open_oura-feat]** - Th0rgal/open_oura `docs/ring-features.md` (feature gating).
+- **[open_oura-spo2]** - Th0rgal/open_oura `docs/spo2-calibration.md` (branch `swim-sessions-and-rdata-spike`; no-license, facts cited only, no code copied). Classes `0x6F`/`0x70` as firmware-computed percentages and documents the `0x8b` ratio-of-ratios path with the app's quadratic coefficients. The coefficients are attributed there to the decompiled Oura app (`com/ouraring/oura/workitem/data/items/d.java`); they are recorded here as CITED FACTS for interoperability, not reproduced implementation - NOOP does not receive `0x8b` and implements none of it.
 - **[relue]** - relue/oura_ring_reverse `docs/.../heartbeat_replication_guide.md` and `heartbeat_complete_flow.md` (no-license; Ring 3 live-HR).
 - **[oura-rs]** - Th0rgal/open_oura `crates/oura-protocol/src/events.rs` (no-license Rust clean-room decoder; facts cited only, no code copied). Its event tags marked `"_status": "unvalidated"` are treated the same as our Tier B - plausible, not ground-truth-confirmed.
 - **[open_oura-act]** - Th0rgal/open_oura `crates/oura-cli/src/activity_model.rs` (no-license; facts cited only). The activity classifier's input assembly reads four SEPARATE event tags — `met`←`0x50`, motion←`0x47`, temp←`0x46`, `hr_bpm`←`0x80` — establishing which tag each signal comes from (notably HR from the `0x80` IBI record, not `0x50`).
@@ -411,6 +412,41 @@ like its sibling banked streams (`.hrv`/`.temp`/`.spo2`/`.sleepPhase`) — the f
 ### 6.5 SpO2 per-sample - `0x6F` `spo2_event` (5–18 B, 1 s spacing)
 - Byte 6: bits `[7:4]` = SpO2 base (<<7); bits `[3:0]` = status flag. [ringverse]
 - One `uint8` SpO2 value per second from byte 7 onward; optional `0xFF` terminator. [ringverse]
+- **`0x6F` is a FIRMWARE-COMPUTED PERCENTAGE, not a raw ADC** — independently documented by open_oura
+  (`docs/spo2-calibration.md`, branch `swim-sessions-and-rdata-spike`), which classes `0x6F`
+  (`API_SPO2_EVENT`) and `0x70` (`API_SPO2_SMOOTHED_EVENT`) as firmware-computed percentages, distinct
+  from the raw ratio path in §6.5.1 below. This corroborates NOOP's own read (the decoder's `#968` note:
+  samples are DIRECT percentages, ~95–96, and adding the scaled base produced impossible ~223 % values).
+- **⚠️ OPEN: 47 % of NOOP's decoded `0x6F` samples exceed 100 %.** On a real Gen 3 capture (2026-08-01,
+  22,516 samples) the channel spans **81–106** with a smooth distribution peaking at **103–104**. Those
+  values are genuinely `0x6F` (confirmed via the sidecar's `unit` tag; only 208 `dc_raw` rows land in the
+  same band), so this is not cross-channel contamination. But real SpO2 cannot exceed 100 %, and
+  open_oura clamps its own computed SpO2 to **[85, 100]**. A smooth distribution centred ~6 points high
+  reads as an **un-modelled offset or scale in the `0x6F` decode**, not as sensor overshoot — subtracting
+  ~6 would map 81–106 onto ~75–100, a physiologically ordinary SpO2 spread. NOT yet corrected: no ground
+  truth pins the offset, and inventing one would fabricate a calibration. The Deep Timeline plots the
+  value un-clamped (gate 50–110) so the discrepancy stays visible rather than being flattened at 100.
+
+### 6.5.1 SpO2 ratio-of-ratios - `0x8b` `spo2_r_pi_event` — **NOT OBSERVED in NOOP captures**
+- Carries the raw **ratio-of-ratios `r`** plus a **perfusion index `pi`** (quality parameter). This is the
+  input the official app converts to a percentage, NOT a percentage itself. [open_oura-spo2]
+- **Conversion (app-side, `libecore` `EcoreWrapper.nativeCalculateSpO2Simple`):**
+  `SpO2(%) = a·r² + b·r + c`, clamped to **[85, 100]**, with hardware-specific coefficients:
+
+  | Hardware | a | b | c |
+  |---|---|---|---|
+  | Gen4 / "Oreo" | −13.4 | −5.1 | 105.2 |
+  | "Cooper" | −12.1 | −6.9 | 106.3 |
+
+  The two sets differ by <1 % on test data, so the mapping is robust to picking the wrong one; the Ring 5
+  mapping is unconfirmed in app 7.18. A naive generic `110 − 25·r` reads ~91 % against a calibrated ~93.4 %
+  — i.e. materially worse. [open_oura-spo2]
+- **NOOP has NEVER received `0x8b`**: 0 occurrences across every capture checked (vs 5,585 × `0x6F` and
+  21,706 × `0x77` in the same files), and it is absent from `OuraEventTag`. Whether that is
+  generation-specific (the published coefficients name Gen4/Oreo and Cooper), server-flag gated like SpO2
+  itself (§7.1), or simply not emitted on this Gen 3 is **unknown**. Worth a targeted check if a properly
+  calibrated SpO2 is ever wanted — this is the only documented path to one, since `0x6F`'s own scale is
+  still open (above).
 
 ### 6.6 SpO2 smoothed/stable - `0x70` `spo2_smoothed`/`spo2_stable` ; `0x7B` `spo2_stable_event` (6 B)
 - `0x7B`: single **uint16 big-endian** at bytes 6–7. **(big-endian - exception to LE rule)** [ringverse]
