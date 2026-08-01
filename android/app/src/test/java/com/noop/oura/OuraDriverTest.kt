@@ -726,7 +726,9 @@ class OuraDriverTest {
     @Test
     fun testRealStepsFieldsDecodesRealCapture0x7F() {
         val d = OuraDriver(ringGen = OuraRingGen.GEN3, authKey = key, allowTierB = true)
-        // The 0x7F partner of the same pair (ring time = the 0x7E record's rt + 1).
+        // The 0x7F partner of the same pair (ring time = the 0x7E record's rt + 1). Its packed block
+        // starts at byte 2, NOT byte 0 (see OuraDecoders.realStepsFieldOffset), so it yields 12 fields:
+        // 12/13 would need record bytes 14/15, which do not exist in a 14-byte body.
         val rec = OuraRecord(type = OuraEventTag.REAL_STEPS_2.raw, ringTimestamp = 3_499_177,
                              payload = bytes("24d467b25c127e3721a0a34dbde3"))
         assertEquals(
@@ -734,12 +736,49 @@ class OuraDriverTest {
                 OuraEvent.RealStepsFields(
                     OuraRealStepsFields(
                         tag = OuraEventTag.REAL_STEPS_2.raw, ringTimestamp = 3_499_177,
-                        fields = listOf(73, 424, 206, 50, 92, 18, 126, 55, 66, 320, 326, 77, 189, 227),
+                        fields = listOf(206, 356, 184, 18, 126, 55, 33, 160, 327, 154, 378, 99),
                     ),
                 ),
             ),
             d.ingest(rec),
         )
+    }
+
+    // MARK: - 0x7F's +2 block offset (NOOP finding, 2026-08-01)
+
+    @Test
+    fun testRealStepsBlockOffsetIsTagDependent() {
+        assertEquals(0, OuraDecoders.realStepsFieldOffset(OuraEventTag.REAL_STEPS_1.raw))
+        assertEquals(
+            "0x7F's packed block starts 2 bytes later than 0x7E's - see OURA_PROTOCOL.md s6.13",
+            2, OuraDecoders.realStepsFieldOffset(OuraEventTag.REAL_STEPS_2.raw),
+        )
+    }
+
+    @Test
+    fun testRealStepsFields0x7FYields12Fields0x7EYields14() {
+        // 0x7F drops fields 12/13 rather than zero-filling them: they would read past the 14-byte body,
+        // and a fabricated zero is indistinguishable from a real one (honest-data invariant).
+        val e = OuraRecord(type = OuraEventTag.REAL_STEPS_1.raw, ringTimestamp = 3_499_176,
+                           payload = bytes("6feb5e0a633e106865da4c136571"))
+        val f = OuraRecord(type = OuraEventTag.REAL_STEPS_2.raw, ringTimestamp = 3_499_177,
+                           payload = bytes("24d467b25c127e3721a0a34dbde3"))
+        assertEquals(14, OuraDecoders.decodeRealStepsFields(e)?.fields?.size)
+        assertEquals(12, OuraDecoders.decodeRealStepsFields(f)?.fields?.size)
+    }
+
+    @Test
+    fun testRealSteps0x7FOffsetReadsTheCarryBitFromTheRightByte() {
+        // The regression this offset fixes: fields 0/8 take their 9th bit from the block's byte 3 / byte 11
+        // MSB. For 0x7F those are RECORD bytes 5 and 13. Craft a body where the OLD (unshifted) read would
+        // see a clear carry and the CORRECT (shifted) read sees a set one - the two decodes cannot agree.
+        val payload = IntArray(14)
+        payload[2] = 0xFF     // block byte 0 for 0x7F -> field0's high bits
+        payload[5] = 0x80     // block byte 3 for 0x7F -> field0's carry bit SET; old read would use byte 3 (=0)
+        val rec = OuraRecord(type = OuraEventTag.REAL_STEPS_2.raw, ringTimestamp = rt, payload = payload)
+        val fields = OuraDecoders.decodeRealStepsFields(rec)?.fields
+        assertEquals("0xFF<<1 | carry(1) - the carry must come from record byte 5, not byte 3", 511, fields?.get(0))
+        assertEquals("block byte 3 (record byte 5) = 0x80, & 0x7f = 0", 0, fields?.get(3))
     }
 
     @Test
@@ -805,7 +844,7 @@ class OuraDriverTest {
                 OuraEvent.RealStepsFields(
                     OuraRealStepsFields(
                         tag = OuraEventTag.REAL_STEPS_2.raw, ringTimestamp = 3_499_475,
-                        fields = listOf(67, 106, 288, 107, 98, 164, 81, 92, 69, 360, 390, 1, 81, 44),
+                        fields = listOf(289, 470, 196, 36, 81, 92, 34, 180, 390, 258, 162, 44),
                     ),
                 ),
             ),
