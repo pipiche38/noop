@@ -75,6 +75,11 @@ public enum OuraActivityEstimator {
     ///   real_steps features, whose best equivalent model over-predicted the same held-out period by
     ///   **+218 % to +449 %**, which is what refuted them.
     ///
+    /// MEASURED ERROR (2026-08-02, an independent day the constant was NOT fitted to): the estimate read
+    /// 6,400 against a WHOOP's 5,017 (+28 %) and a watch's 4,605 (+39 %) - the two pedometers themselves
+    /// differ by 9 %, which sets the floor on any comparison. So the error is ONE-DIRECTIONAL: it
+    /// OVER-READS by roughly 30-40 %, it does not scatter either side. Do not read it as "±30 %".
+    ///
     /// KNOWN BIASES, all one-directional and unquantified: the MET stream has ring-side cadence gaps
     /// (~86 % minute coverage on a choppy day, §6.13) so active minutes UNDERCOUNT; MET underreads water
     /// activity (swims read near-rest); and an active minute that is not walking (cycling, rowing, a
