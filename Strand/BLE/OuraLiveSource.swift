@@ -759,8 +759,13 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         for day in activityMETByDay.keys.sorted() {
             let est = OuraActivityEstimator.estimate(metSamples: activityMETByDay[day] ?? [],
                                                      epochSeconds: activityEpochSeconds)
-            log(String(format: "Oura: activity estimate day=%@ samples=%d meanMET=%.2f maxMET=%.1f metMin=%.1f activeMin=%.1f [assumed %.0fs/sample, Tier-B est]",
-                       day, est.sampleCount, est.meanMET, est.maxMET, est.metMinutes, est.activeMinutes, activityEpochSeconds))
+            // `walkStepsEst` is a WALKING-EQUIVALENT diagnostic (activeMin × 100), not a step count — the
+            // ring sends none NOOP can decode (§6.13). Logged so a day's running figure can be eyeballed
+            // against a real pedometer; ±30 % on its one held-out check, and it never leaves this log line
+            // (no `steps` row, no scoring). See OuraActivityEstimator.stepsPerActiveMinute.
+            log(String(format: "Oura: activity estimate day=%@ samples=%d meanMET=%.2f maxMET=%.1f metMin=%.1f activeMin=%.1f walkStepsEst≈%.0f [assumed %.0fs/sample, Tier-B est; steps are a ±30%% walking-equivalent, NOT a count]",
+                       day, est.sampleCount, est.meanMET, est.maxMET, est.metMinutes, est.activeMinutes,
+                       est.estStepsWalkingEquivalent, activityEpochSeconds))
         }
     }
 
