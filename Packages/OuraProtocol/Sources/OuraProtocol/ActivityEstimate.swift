@@ -33,9 +33,16 @@ public struct OuraActivityEstimate: Equatable, Sendable {
     public let estActiveKcal: Double?
     /// Estimated GROSS energy: Σ metᵢ × massKg × epochHours (kcal), basal included. nil without body mass.
     public let estTotalKcal: Double?
+    /// A WALKING-EQUIVALENT step estimate: `activeMinutes × stepsPerActiveMinute`. See that constant for
+    /// the evidence and the (substantial) error bars. This is a DIAGNOSTIC figure for eyeballing a day's
+    /// trend against a real pedometer — it is NOT a step count, must never mint a `steps` row, and must
+    /// never be scored. NOOP's honest position stands: the ring exposes no step count NOOP can decode
+    /// (`0x7E`/`0x7F` are model FEATURES, ground-truth-refuted 2026-08-01 — OURA_PROTOCOL.md §6.13).
+    public let estStepsWalkingEquivalent: Double
 
     public init(sampleCount: Int, epochSeconds: Double, meanMET: Double, maxMET: Double,
-                metMinutes: Double, activeMinutes: Double, estActiveKcal: Double?, estTotalKcal: Double?) {
+                metMinutes: Double, activeMinutes: Double, estActiveKcal: Double?, estTotalKcal: Double?,
+                estStepsWalkingEquivalent: Double = 0) {
         self.sampleCount = sampleCount
         self.epochSeconds = epochSeconds
         self.meanMET = meanMET
@@ -44,12 +51,36 @@ public struct OuraActivityEstimate: Equatable, Sendable {
         self.activeMinutes = activeMinutes
         self.estActiveKcal = estActiveKcal
         self.estTotalKcal = estTotalKcal
+        self.estStepsWalkingEquivalent = estStepsWalkingEquivalent
     }
 }
 
 /// Pure MET-stream aggregation. No database, no CoreBluetooth, no clock — the caller decides which
 /// samples belong to the window/day (using the UTC anchor) and passes them in.
 public enum OuraActivityEstimator {
+    /// Steps assumed per ACTIVE minute (MET ≥ threshold) for `estStepsWalkingEquivalent`.
+    ///
+    /// WHY 100, AND WHY THIS IS A COARSE ESTIMATE, NOT A DECODE: the ring sends no step count NOOP can
+    /// read — the `0x7E`/`0x7F` real_steps records were ground-truth-refuted on 2026-08-01 (no field is a
+    /// count; they are the step model's INPUT features, OURA_PROTOCOL.md §6.13). So a step figure can only
+    /// be INFERRED from an independent signal, and the MET stream is the one NOOP already decodes with a
+    /// self-proven 60 s cadence.
+    ///
+    /// EVIDENCE (a single day, two overlapping measured references from one wearer):
+    /// - Calibrating on a golf round (11,167 measured steps / 113 active minutes) gives **99 steps per
+    ///   active minute** — which lands on ordinary walking cadence (~100–120 steps·min⁻¹) rather than on
+    ///   an arbitrary fitted number, so 100 is used rather than the fitted 99.
+    /// - HELD-OUT CHECK on a period the constant was NOT fitted to (the rest of that day, 2,182 measured
+    ///   steps): predicts ~2,900, i.e. **≈ +30 %**. Coarse, but the right order — and far better than the
+    ///   real_steps features, whose best equivalent model over-predicted the same held-out period by
+    ///   **+218 % to +449 %**, which is what refuted them.
+    ///
+    /// KNOWN BIASES, all one-directional and unquantified: the MET stream has ring-side cadence gaps
+    /// (~86 % minute coverage on a choppy day, §6.13) so active minutes UNDERCOUNT; MET underreads water
+    /// activity (swims read near-rest); and an active minute that is not walking (cycling, rowing, a
+    /// vigorous chore) contributes phantom steps. Treat this as "roughly how much walking was in the day",
+    /// never as a pedometer.
+    public static let stepsPerActiveMinute: Double = 100
     /// Aggregate raw MET samples into an estimate. `epochSeconds` is the assumed per-sample duration
     /// (the calibration knob); `bodyMassKg` enables the energy fields; a sample counts as "active" when
     /// its MET reaches `moderateThresholdMET`. An empty input yields an all-zero estimate (never nil —
@@ -93,7 +124,8 @@ public enum OuraActivityEstimator {
             metMinutes: r2(metMinutes),
             activeMinutes: r2(activeMinutes),
             estActiveKcal: activeKcal.map(r2),
-            estTotalKcal: totalKcal.map(r2)
+            estTotalKcal: totalKcal.map(r2),
+            estStepsWalkingEquivalent: (activeMinutes * stepsPerActiveMinute).rounded()
         )
     }
 
