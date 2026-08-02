@@ -759,13 +759,23 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         for day in activityMETByDay.keys.sorted() {
             let est = OuraActivityEstimator.estimate(metSamples: activityMETByDay[day] ?? [],
                                                      epochSeconds: activityEpochSeconds)
-            // `walkStepsEst` is a WALKING-EQUIVALENT diagnostic (activeMin × 100), not a step count — the
-            // ring sends none NOOP can decode (§6.13). Logged so a day's running figure can be eyeballed
-            // against a real pedometer; ±30 % on its one held-out check, and it never leaves this log line
-            // (no `steps` row, no scoring). See OuraActivityEstimator.stepsPerActiveMinute.
-            log(String(format: "Oura: activity estimate day=%@ samples=%d meanMET=%.2f maxMET=%.1f metMin=%.1f activeMin=%.1f walkStepsEst≈%.0f [assumed %.0fs/sample, Tier-B est; steps are a ±30%% walking-equivalent, NOT a count]",
+            // The MET figures above describe THIS SESSION's drained samples. The step estimate must not:
+            // it is a DAILY total, so it reads the persisted cross-session tally (`OuraActivityDump`,
+            // deduped by ring-time) instead. Reading it off the session buffer made the figure "steps
+            // since this session's cursor" — on 2026-08-02 that was 395 of the day's 892 samples, which
+            // happened to land near the measured count and would have read very differently at another
+            // connect time. `dayActiveMin` is logged beside it so the two are never confused.
+            //
+            // `walkStepsEst` is a WALKING-EQUIVALENT diagnostic (activeMin × 100), NOT a step count — the
+            // ring sends none NOOP can decode (§6.13). It OVER-READS by roughly 30-40 % against real
+            // pedometers (measured: +28 % vs a WHOOP's 5,017 and +39 % vs a watch's 4,605 on the same day,
+            // and +33 % on the held-out calibration check) — one-directional, never under. It never leaves
+            // this log line: no `steps` row, no scoring. See OuraActivityEstimator.stepsPerActiveMinute.
+            let dayActiveMin = activityDump?.activeMinutes(forDay: day) ?? est.activeMinutes
+            let dayStepsEst = (dayActiveMin * OuraActivityEstimator.stepsPerActiveMinute).rounded()
+            log(String(format: "Oura: activity estimate day=%@ samples=%d meanMET=%.2f maxMET=%.1f metMin=%.1f activeMin=%.1f (session) | dayActiveMin=%.1f walkStepsEst≈%.0f (day total) [assumed %.0fs/sample, Tier-B est; steps OVER-READ ~30-40%%, walking-equivalent, NOT a count]",
                        day, est.sampleCount, est.meanMET, est.maxMET, est.metMinutes, est.activeMinutes,
-                       est.estStepsWalkingEquivalent, activityEpochSeconds))
+                       dayActiveMin, dayStepsEst, activityEpochSeconds))
         }
     }
 
