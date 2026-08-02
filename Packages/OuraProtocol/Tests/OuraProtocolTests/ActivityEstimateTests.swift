@@ -95,7 +95,7 @@ final class ActivityEstimateTests: XCTestCase {
     func testWalkingEquivalentStepsIsActiveMinutesTimesCadence() {
         let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 5.0, count: 10), epochSeconds: 60)
         XCTAssertEqual(e.activeMinutes, 10, accuracy: 0.001)
-        XCTAssertEqual(e.estStepsWalkingEquivalent,
+        XCTAssertEqual(e.estStepsWalkingEquivalent ?? -1,
                        10 * OuraActivityEstimator.stepsPerActiveMinute, accuracy: 0.001)
     }
 
@@ -104,7 +104,7 @@ final class ActivityEstimateTests: XCTestCase {
     func testSedentaryDayEstimatesZeroSteps() {
         let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 1.0, count: 500), epochSeconds: 60)
         XCTAssertEqual(e.activeMinutes, 0, accuracy: 0.001)
-        XCTAssertEqual(e.estStepsWalkingEquivalent, 0, accuracy: 0.001)
+        XCTAssertEqual(e.estStepsWalkingEquivalent ?? -1, 0, accuracy: 0.001)
     }
 
     /// Reproduces the calibration day: 113 active minutes against 11,167 MEASURED steps. The estimate must
@@ -113,8 +113,8 @@ final class ActivityEstimateTests: XCTestCase {
     func testMatchesTheMeasuredCalibrationDayWithinTolerance() {
         let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 5.0, count: 113), epochSeconds: 60)
         let measured = 11_167.0
-        let err = abs(e.estStepsWalkingEquivalent - measured) / measured
-        XCTAssertLessThan(err, 0.15, "walking-equivalent \(e.estStepsWalkingEquivalent) vs measured \(measured)")
+        let err = abs((e.estStepsWalkingEquivalent ?? 0) - measured) / measured
+        XCTAssertLessThan(err, 0.15, "walking-equivalent \(String(describing: e.estStepsWalkingEquivalent)) vs measured \(measured)")
     }
 
     /// The cadence constant must stay in the physiological walking band. It is justified BY that band
@@ -123,5 +123,31 @@ final class ActivityEstimateTests: XCTestCase {
     func testCadenceConstantStaysPhysiological() {
         XCTAssertGreaterThanOrEqual(OuraActivityEstimator.stepsPerActiveMinute, 80)
         XCTAssertLessThanOrEqual(OuraActivityEstimator.stepsPerActiveMinute, 130)
+    }
+
+    /// The 857-day validation showed the model does not merely lose precision past ~180 active minutes,
+    /// it becomes WRONG (median +226 %, p90 +812 %, only 24 % of days within ±50 %). Those days must
+    /// yield NO number rather than a confidently bad one.
+    func testImplausiblyActiveDayEmitsNoStepEstimate() {
+        let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 5.0, count: 300), epochSeconds: 60)
+        XCTAssertEqual(e.activeMinutes, 300, accuracy: 0.001)
+        XCTAssertNil(e.estStepsWalkingEquivalent,
+                     "past maxTrustedActiveMinutes the estimate must be suppressed, not printed")
+    }
+
+    /// Just inside the threshold still produces a figure — the guard must not silently swallow ordinary
+    /// very-active days.
+    func testJustInsideTheTrustThresholdStillEstimates() {
+        let n = Int(OuraActivityEstimator.maxTrustedActiveMinutes)
+        let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 5.0, count: n), epochSeconds: 60)
+        XCTAssertNotNil(e.estStepsWalkingEquivalent)
+        XCTAssertEqual(e.estStepsWalkingEquivalent ?? -1,
+                       Double(n) * OuraActivityEstimator.stepsPerActiveMinute, accuracy: 0.001)
+    }
+
+    /// The threshold is a measured boundary, not a round guess — pin it so a casual edit has to confront
+    /// the validation table in the doc comment.
+    func testTrustThresholdMatchesTheValidatedBoundary() {
+        XCTAssertEqual(OuraActivityEstimator.maxTrustedActiveMinutes, 180, accuracy: 0.001)
     }
 }
