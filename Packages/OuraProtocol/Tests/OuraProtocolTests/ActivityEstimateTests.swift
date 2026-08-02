@@ -87,4 +87,41 @@ final class ActivityEstimateTests: XCTestCase {
         // above-resting = (0.2 + 0.2) MET-epochs * 70 kg / 60 h -> ~0.47 kcal
         XCTAssertEqual(e.estActiveKcal!, 0.47, accuracy: 0.01)
     }
+
+    // MARK: - Walking-equivalent step estimate (diagnostic, NOT a step count)
+
+    /// The estimate is exactly `activeMinutes × stepsPerActiveMinute`, so a log line can be audited from
+    /// the two figures printed beside it. 10 samples at MET 5 with a 60 s epoch = 10 active minutes.
+    func testWalkingEquivalentStepsIsActiveMinutesTimesCadence() {
+        let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 5.0, count: 10), epochSeconds: 60)
+        XCTAssertEqual(e.activeMinutes, 10, accuracy: 0.001)
+        XCTAssertEqual(e.estStepsWalkingEquivalent,
+                       10 * OuraActivityEstimator.stepsPerActiveMinute, accuracy: 0.001)
+    }
+
+    /// A wholly sedentary day has NO active minutes, so the walking-equivalent must be exactly 0 — never a
+    /// residual "some steps" figure invented out of resting MET.
+    func testSedentaryDayEstimatesZeroSteps() {
+        let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 1.0, count: 500), epochSeconds: 60)
+        XCTAssertEqual(e.activeMinutes, 0, accuracy: 0.001)
+        XCTAssertEqual(e.estStepsWalkingEquivalent, 0, accuracy: 0.001)
+    }
+
+    /// Reproduces the calibration day: 113 active minutes against 11,167 MEASURED steps. The estimate must
+    /// land within ~15 % of the real figure — this pins the constant against the ground truth it came from,
+    /// so a future edit to `stepsPerActiveMinute` that drifts away from reality fails here.
+    func testMatchesTheMeasuredCalibrationDayWithinTolerance() {
+        let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 5.0, count: 113), epochSeconds: 60)
+        let measured = 11_167.0
+        let err = abs(e.estStepsWalkingEquivalent - measured) / measured
+        XCTAssertLessThan(err, 0.15, "walking-equivalent \(e.estStepsWalkingEquivalent) vs measured \(measured)")
+    }
+
+    /// The cadence constant must stay in the physiological walking band. It is justified BY that band
+    /// (~100-120 steps/min) rather than by an arbitrary fit, so a value outside it would mean the estimate
+    /// had quietly become a curve-fit to one wearer.
+    func testCadenceConstantStaysPhysiological() {
+        XCTAssertGreaterThanOrEqual(OuraActivityEstimator.stepsPerActiveMinute, 80)
+        XCTAssertLessThanOrEqual(OuraActivityEstimator.stepsPerActiveMinute, 130)
+    }
 }
