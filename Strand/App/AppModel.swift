@@ -1150,6 +1150,11 @@ final class AppModel: ObservableObject {
     /// The active Oura ring's honest needs-pairing message (mirrored off the live source), surfaced verbatim
     /// on the wizard's Failed step. nil when the ring is fine or no Oura source is live.
     @Published private(set) var ouraNeedsPairing: String?
+    /// The live outcome of an Advanced "I already have my ring's key(s)" verification, mirrored off the
+    /// coordinator's live `OuraLiveSource` so the wizard can drive its "Verifying your key" step to a winning
+    /// key (close) or an honest exhausted dead-end WITHOUT reaching into the BLE layer. nil when no trial is
+    /// in flight. See `OuraLiveSource.KeyTrialPhase`.
+    @Published private(set) var ouraKeyTrialPhase: OuraLiveSource.KeyTrialPhase?
     /// Combine subscriptions mirroring the live Oura source's `adoptPhase` / `needsPairing` into the two
     /// published properties above. Re-bound whenever the active Oura source changes.
     private var ouraAdoptCancellables = Set<AnyCancellable>()
@@ -1161,9 +1166,26 @@ final class AppModel: ObservableObject {
     /// commit. Never prompts to make-active (the takeover IS the user's new active source).
     func adoptOuraRing(_ device: PairedDevice) {
         sourceCoordinator?.requestOuraAdopt(deviceId: device.id)
-        // Reset the mirror so a previous attempt's outcome never leaks into this one.
+        // Reset the mirrors so a previous attempt's outcome (adopt or key-trial) never leaks into this one.
         ouraAdoptPhase = .idle
         ouraNeedsPairing = nil
+        ouraKeyTrialPhase = nil
+        registerDevice(device, makeActive: true)
+        bindOuraAdoptMirror()
+    }
+
+    /// Verify one or more candidate keys against an Oura ring the user already owns the key(s) for (the
+    /// Advanced "I already have my ring's key" path): arm a key trial for THIS ring so its next live session
+    /// tries each candidate in turn and keeps the first that authenticates, then register it active (which
+    /// starts that session) and begin mirroring the trial outcome for the wizard. This is NON-destructive —
+    /// no adopt consent is granted, so the ring is never reset and no key is installed; a wrong candidate
+    /// simply fails auth and the next is tried. Nothing is saved until a candidate authenticates.
+    func verifyOuraKeys(_ device: PairedDevice, keys: [Data]) {
+        sourceCoordinator?.requestOuraKeyTrial(deviceId: device.id, keys: keys)
+        // Reset the mirrors so a previous attempt's outcome never leaks into this one.
+        ouraAdoptPhase = .idle
+        ouraNeedsPairing = nil
+        ouraKeyTrialPhase = keys.isEmpty ? nil : .trying(attempt: 1, total: keys.count)
         registerDevice(device, makeActive: true)
         bindOuraAdoptMirror()
     }
@@ -1189,6 +1211,14 @@ final class AppModel: ObservableObject {
             }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.ouraNeedsPairing = $0 }
+            .store(in: &ouraAdoptCancellables)
+        coordinator.$ouraSource
+            .flatMap { source -> AnyPublisher<OuraLiveSource.KeyTrialPhase?, Never> in
+                source?.$keyTrialPhase.eraseToAnyPublisher()
+                    ?? Just(nil).eraseToAnyPublisher()
+            }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.ouraKeyTrialPhase = $0 }
             .store(in: &ouraAdoptCancellables)
     }
 
