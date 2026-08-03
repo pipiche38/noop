@@ -77,6 +77,12 @@ final class SourceCoordinator: ObservableObject {
     /// nothing else. Cleared as soon as it is consumed (or when adopt is cancelled), so a later reconnect of
     /// the same ring is a normal read-only session that never re-installs a key.
     private var pendingAdoptDeviceId: String?
+    /// The deviceId + candidate keys for a pending Advanced key trial (the wizard's "I already have my ring's
+    /// key(s)" path). The NEXT bring-up of THIS Oura ring starts a `beginKeyTrial` with these candidates
+    /// instead of a plain connect, so NOOP verifies each key against the ring and keeps the first that
+    /// authenticates. Consumed (cleared) the moment the trial starts. This is a NON-destructive, read-only
+    /// verification — no adopt consent is granted here, so it can never install a key.
+    private var pendingTrial: (deviceId: String, keys: [Data])?
     /// The deviceId the active non-WHOOP source (`activeSource`) runs for.
     private var activeStrapId: String?
     /// True once we've transitioned onto a generic strap. While false (the default / WHOOP-active
@@ -264,11 +270,19 @@ final class SourceCoordinator: ObservableObject {
         // concrete driver), then bring it up. `.liveAppleWatch` never reaches here — it's short-circuited
         // above — so `makeSource` only ever sees a real BLE source kind.
         let source = makeSource(for: id)
-        // CONNECT to the active strap's known peripheral, don't just scan. scan() only discovered + listed
-        // it but never connected, so a Polar etc. showed as "found" yet never streamed (#421). connect()
-        // reaches the cached peripheral by identifier (or scans-then-connects if not yet cached); a bare
-        // scan is the fallback only when the registry row has no/invalid identifier.
-        if let pid = peripheralId(for: id), let uuid = UUID(uuidString: pid) {
+        let target = peripheralId(for: id).flatMap { UUID(uuidString: $0) }
+        // An armed Advanced key trial for THIS Oura ring brings the source up via `beginKeyTrial` instead of
+        // a plain connect, so NOOP verifies each candidate key against the ring and keeps the first that
+        // authenticates (nothing is saved until one works). Needs a known peripheral to reach — the wizard
+        // only arms a trial after the user has picked a scanned ring, so `target` is always set here.
+        if let oura = source as? OuraLiveSource, let trial = pendingTrial, trial.deviceId == id, let uuid = target {
+            pendingTrial = nil
+            oura.beginKeyTrial(trial.keys, connectTo: uuid)
+        } else if let uuid = target {
+            // CONNECT to the active strap's known peripheral, don't just scan. scan() only discovered + listed
+            // it but never connected, so a Polar etc. showed as "found" yet never streamed (#421). connect()
+            // reaches the cached peripheral by identifier (or scans-then-connects if not yet cached); a bare
+            // scan is the fallback only when the registry row has no/invalid identifier.
             source.connect(uuid)
         } else {
             source.scan()
@@ -475,6 +489,25 @@ final class SourceCoordinator: ObservableObject {
     /// active. Per OURA_PROTOCOL.md s3.2 the install is a one-time, consent-gated provisioning write.
     func requestOuraAdopt(deviceId: String) {
         pendingAdoptDeviceId = deviceId
+    }
+
+    /// Arm an Advanced key trial for `deviceId`: the NEXT bring-up of this Oura ring verifies each candidate
+    /// key against it (via `OuraLiveSource.beginKeyTrial`) and keeps the first that authenticates. Called by
+    /// the wizard immediately before it registers the ring active. This grants NO adopt consent — the trial
+    /// is a non-destructive read-only verification that never installs a key (a wrong candidate just fails
+    /// auth and the next is tried).
+    func requestOuraKeyTrial(deviceId: String, keys: [Data]) {
+        // Re-verifying the SAME ring that is already the live active source (e.g. after an exhausted trial,
+        // the user edited the keys and tried again) won't re-run `switchToStrap` — a make-active for the
+        // already-active id early-returns. Start the trial directly on the live source in that case; else
+        // stash it for the next bring-up (`switchToStrap` consumes it).
+        if let oura = ouraSource, activeStrapId == deviceId,
+           let pid = peripheralId(for: deviceId), let uuid = UUID(uuidString: pid) {
+            pendingTrial = nil
+            oura.beginKeyTrial(keys, connectTo: uuid)
+        } else {
+            pendingTrial = (deviceId, keys)
+        }
     }
 
     /// Stop the live non-WHOOP source (standard strap, FTMS machine, Huami device, or Oura ring) and drop

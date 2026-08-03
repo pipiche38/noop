@@ -82,8 +82,10 @@ struct AddDeviceWizard: View {
     ///   - pick     Live scan + pick a ring; an unreset ring surfaces honestly.
     ///   - confirm  Detected generation + per-gen capability checklist + the SECOND destructive "Take over" gate.
     ///   - adopting Honest key-install progress (no fake percent), driven by the live source's adopt phase.
-    ///   - failed   An honest dead-end when adoption fails, with the file-import + Advanced-key fallbacks.
-    enum OuraStep { case gate, prep, pick, confirm, adopting, failed }
+    ///   - verifyingKeys Advanced path only: honest per-candidate "verifying your key" progress, driven by the
+    ///                   live source's key-trial phase (tries each supplied key, keeps the first that works).
+    ///   - failed   An honest dead-end when adoption OR key verification fails, with the file-import fallback.
+    enum OuraStep { case gate, prep, pick, confirm, adopting, verifyingKeys, failed }
 
     @State private var step: Step = .type
     @State private var type: DeviceType?
@@ -93,6 +95,10 @@ struct AddDeviceWizard: View {
     /// tick). Mirrors the Android `ouraConfirmAdopt`. Only the standard adopt path raises it; the Advanced
     /// key path is non-destructive and skips it.
     @State private var ouraConfirmAdopt = false
+    /// True when the wizard reached the `.failed` step from an EXHAUSTED Advanced key trial (every candidate
+    /// rejected) rather than a failed destructive adopt. Set/cleared as the flow enters `.failed` so the
+    /// Failed face's copy + action can't be driven by a stale published key-trial phase from a prior attempt.
+    @State private var ouraFailedFromKeyTrial = false
 
     // The chosen strap, in whichever shape its path produces.
     /// A WHOOP picked from `discoveredWhoops` (uuid / advertised name / rssi).
@@ -120,7 +126,9 @@ struct AddDeviceWizard: View {
     /// hex-key field and we authenticate with the supplied key WITHOUT a factory reset (the Oura app keeps
     /// working). Off by default; only the small Advanced link on the gate turns it on.
     @State private var ouraAdvancedKeyMode = false
-    /// The 32-hex-character ring key typed on the Advanced path. Validated to 16 bytes before scan.
+    /// The Advanced-path key field: one or more 32-hex-character candidate keys, one per line (also accepts
+    /// comma/space separators). Each is parsed to 16 bytes (`ouraCandidateKeys`); NOOP tries them against the
+    /// ring in order and keeps the first that authenticates. A single key is just a one-line list.
     @State private var ouraKeyDraft = ""
 
     /// Discovery-only HR source for the strap path. Never persists (no-op closure) and is never asked
@@ -230,7 +238,7 @@ struct AddDeviceWizard: View {
             guard type == .oura, ouraStep == .adopting else { return }
             switch phase {
             case .streaming:        stopAllScans(); onClose()   // adoption complete: the ring is the live source now
-            case .failed:           ouraStep = .failed
+            case .failed:           ouraFailedFromKeyTrial = false; ouraStep = .failed
             case .idle, .installingKey: break
             }
         }
@@ -238,7 +246,19 @@ struct AddDeviceWizard: View {
             // A needs-pairing message during the Adopting step is an honest failure too (covers the no-ack /
             // ack!=OK paths that surface via needsPairing rather than a phase flip alone).
             guard type == .oura, ouraStep == .adopting, msg != nil else { return }
+            ouraFailedFromKeyTrial = false
             ouraStep = .failed
+        }
+        // Drive the Advanced key-trial's Verifying step: a candidate authenticated (close — the ring is the
+        // live source now, its key saved), or every candidate was rejected (honest exhausted dead-end). A
+        // `.trying` update just refreshes the progress copy. Only acts while Verifying.
+        .onChange(of: model.ouraKeyTrialPhase) { phase in
+            guard type == .oura, ouraStep == .verifyingKeys else { return }
+            switch phase {
+            case .succeeded:        stopAllScans(); onClose()   // a key worked: the ring is live with that key
+            case .exhausted:        ouraFailedFromKeyTrial = true; ouraStep = .failed
+            case .trying, .none:    break
+            }
         }
     }
 
@@ -281,7 +301,8 @@ struct AddDeviceWizard: View {
     /// Back is shown on every step except the very first (the type list) and, on the Oura adopt flow, the
     /// Adopting progress (no back while a key install is in flight). Parity with the Android `showBack`.
     private var showBack: Bool {
-        if type == .oura { return ouraStep != .adopting }
+        // No back while a key install (adopting) OR a key verification (verifyingKeys) is in flight.
+        if type == .oura { return ouraStep != .adopting && ouraStep != .verifyingKeys }
         return step != .type
     }
 
@@ -293,7 +314,8 @@ struct AddDeviceWizard: View {
             case .pick:     return "Pick the ring"
             case .confirm:  return "Your ring"
             case .adopting: return "Taking over your ring"
-            case .failed:   return "Could not take over"
+            case .verifyingKeys: return "Verifying your key"
+            case .failed:   return ouraFailedFromKeyTrial ? "No matching key" : "Could not take over"
             }
         }
         switch step {
@@ -310,7 +332,7 @@ struct AddDeviceWizard: View {
             case .gate:    return ouraAdvancedKeyMode ? "Power users only." : "Take it over locally. Beta."
             case .prep:    return "Reset it in the Oura app first."
             case .pick:    return "Tap the one that's yours."
-            case .confirm, .adopting, .failed: return nil
+            case .confirm, .adopting, .verifyingKeys, .failed: return nil
             }
         }
         switch step {
@@ -371,6 +393,7 @@ struct AddDeviceWizard: View {
                 ouraAdvancedKeyMode = false
                 ouraKeyDraft = ""
                 ouraConfirmAdopt = false
+                ouraFailedFromKeyTrial = false
                 pickedOura = nil
                 ouraStep = .gate
             } else {
@@ -553,6 +576,7 @@ struct AddDeviceWizard: View {
             case .pick:     ouraPickFace
             case .confirm:  ouraConfirmFace
             case .adopting: ouraAdoptingFace
+            case .verifyingKeys: ouraVerifyingFace
             case .failed:   ouraFailedFace
             }
         }
@@ -724,9 +748,10 @@ struct AddDeviceWizard: View {
         .background(StrandPalette.statusWarning.opacity(0.10),
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-        Text("Ring key (32 hex characters)").strandOverline()
-        TextField("0123456789abcdef0123456789abcdef", text: $ouraKeyDraft)
+        Text("Ring key(s) (32 hex characters, one per line)").strandOverline()
+        TextField("0123456789abcdef0123456789abcdef", text: $ouraKeyDraft, axis: .vertical)
             .textFieldStyle(.plain)
+            .lineLimit(3...6)
             .font(StrandFont.body.monospaced())
             .foregroundStyle(StrandPalette.textPrimary)
             .autocorrectionDisabled(true)
@@ -736,13 +761,25 @@ struct AddDeviceWizard: View {
             .padding(12)
             .background(StrandPalette.surfaceInset,
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .accessibilityLabel("Ring key, 32 hexadecimal characters")
-        if !ouraKeyDraft.isEmpty && ouraKeyBytes == nil {
-            Text("That is not a 32-character hex key.")
+            .accessibilityLabel("Ring keys, 32 hexadecimal characters each, one per line")
+        // Honest, non-blocking hint: count valid candidates and flag malformed lines without disabling Scan
+        // for the good ones. If you have several extracted keys and don't know which is this ring's, paste
+        // them all — NOOP tries each and keeps the one that authenticates.
+        let validCount = ouraCandidateKeys.count
+        let malformed = ouraMalformedKeyCount
+        if validCount > 0 {
+            Text(validCount == 1 ? "1 candidate key ready to try."
+                                 : "\(validCount) candidate keys ready — NOOP will try each and keep the one that works.")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textSecondary)
+        }
+        if malformed > 0 {
+            Text(malformed == 1 ? "One line isn't a 32-character hex key — it will be skipped."
+                                : "\(malformed) lines aren't 32-character hex keys — they will be skipped.")
                 .font(StrandFont.footnote)
                 .foregroundStyle(StrandPalette.statusCritical)
         }
-        Text("NOOP stores this key only on this device, in the same place it stores your paired bands.")
+        Text("NOOP stores the working key only on this device, in the same place it stores your paired bands. Keys that don't authenticate are never saved.")
             .font(StrandFont.footnote)
             .foregroundStyle(StrandPalette.textTertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -758,7 +795,7 @@ struct AddDeviceWizard: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(StrandPalette.accent)
-        .disabled(ouraKeyBytes == nil)
+        .disabled(ouraCandidateKeys.isEmpty)
         .accessibilityLabel("Scan for your Oura ring")
 
         Button("Back to standard setup") {
@@ -845,19 +882,22 @@ struct AddDeviceWizard: View {
                 .accessibilityLabel("Device name")
 
             if ouraAdvancedKeyMode {
-                // Non-destructive: the user's own key authenticates without resetting the ring, so this reads
-                // as a plain accent connect and skips the destructive confirm.
+                // Non-destructive: the user's own key(s) authenticate without resetting the ring, so this
+                // reads as a plain accent connect and skips the destructive confirm. It kicks off a live
+                // verification that tries each candidate and reports which one authenticates.
+                let n = ouraCandidateKeys.count
                 Button {
-                    finishAdvancedOura()
+                    commitOuraKeyTrial()
                 } label: {
-                    Text("Connect to this ring")
+                    Text(n <= 1 ? "Verify this key" : "Verify these \(n) keys")
                         .font(StrandFont.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(StrandPalette.accent)
-                .accessibilityLabel("Connect to this ring")
+                .disabled(ouraCandidateKeys.isEmpty)
+                .accessibilityLabel(n <= 1 ? "Verify this key" : "Verify these \(n) keys")
                 Text("Both NOOP and the Oura app can use a ring you own by key, but only one can hold the Bluetooth link at a time.")
                     .font(StrandFont.footnote)
                     .foregroundStyle(StrandPalette.textTertiary)
@@ -904,34 +944,74 @@ struct AddDeviceWizard: View {
         .frostedCardSurface(cornerRadius: 14)
     }
 
+    // MARK: Step 5 (Oura, Advanced) - verifying supplied key(s): honest per-candidate progress
+
+    /// The Verifying face (Advanced key path only): an honest "trying your key(s)" progress card, driven by
+    /// the live source's key-trial phase (see the body `.onChange`). No fake percent — it names which
+    /// candidate of how many is being authenticated right now, so pasting several extracted keys and letting
+    /// NOOP find the right one reads truthfully. Reaches success (close) or the Failed face (all rejected).
+    @ViewBuilder private var ouraVerifyingFace: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                ProgressView().tint(StrandPalette.accent)
+                Text("Verifying your key")
+                    .font(StrandFont.headline)
+                    .foregroundStyle(StrandPalette.textPrimary)
+            }
+            if case let .trying(attempt, total) = model.ouraKeyTrialPhase, total > 1 {
+                Text("Trying key \(attempt) of \(total) against the ring. NOOP keeps the first one that authenticates.")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Authenticating with the ring using your key. Keep the ring close. This does not reset the ring — the Oura app keeps working.")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frostedCardSurface(cornerRadius: 14)
+    }
+
     // MARK: Step 5 (Oura, failure) - honest dead-end, never a fabricated success
 
-    /// The Failed face: an honest dead-end with the live source's needs-pairing message (when present) and the
-    /// two reachable fallbacks (Try again -> back to pick; Use file import -> close to Data Sources). Re-enables
-    /// the user's exits so they are never trapped. Mirrors the Android `OuraFailedStep`.
+    /// The Failed face: an honest dead-end. For a failed destructive adopt it carries the live source's
+    /// needs-pairing message; for an exhausted Advanced key trial it says none of the supplied keys
+    /// authenticated the ring and offers "Edit keys" (back to the key field, ring still picked). Both keep the
+    /// file-import fallback so the user is never trapped. Mirrors the Android `OuraFailedStep`.
     @ViewBuilder private var ouraFailedFace: some View {
+        let exhausted = ouraFailedFromKeyTrial
         VStack(alignment: .leading, spacing: 12) {
-            Text("We could not take over this ring.")
+            Text(exhausted ? "None of those keys authenticated this ring." : "We could not take over this ring.")
                 .font(StrandFont.headline)
                 .foregroundStyle(StrandPalette.textPrimary)
-            Text(model.ouraNeedsPairing ?? "The most common cause is the ring was not fully reset in the Oura app, or the Oura app is still running. Reset the ring again, force-quit Oura, then try once more. If it keeps failing, your ring may be a generation NOOP cannot adopt yet. The ring is not bricked: re-pair it in the Oura app to recover it. You can still use file import.")
+            Text(exhausted
+                 ? "NOOP tried every key you gave it and the ring rejected all of them, so nothing was saved. Double-check you copied the full 32-character keys and that they belong to THIS ring (the id in a backup is not the same as the Bluetooth ring you picked). You can edit the keys and try again, or use file import."
+                 : (model.ouraNeedsPairing ?? "The most common cause is the ring was not fully reset in the Oura app, or the Oura app is still running. Reset the ring again, force-quit Oura, then try once more. If it keeps failing, your ring may be a generation NOOP cannot adopt yet. The ring is not bricked: re-pair it in the Oura app to recover it. You can still use file import."))
                 .font(StrandFont.subhead)
                 .foregroundStyle(StrandPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
                 Button {
-                    pickedOura = nil
-                    ouraScanner.scan()
-                    ouraStep = .pick
+                    if exhausted {
+                        // Keep the picked ring and the entered keys; return to the key field to correct them.
+                        ouraStep = .gate
+                    } else {
+                        pickedOura = nil
+                        ouraScanner.scan()
+                        ouraStep = .pick
+                    }
                 } label: {
-                    Text("Try again")
+                    Text(exhausted ? "Edit keys" : "Try again")
                         .font(StrandFont.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(StrandPalette.accent)
-                .accessibilityLabel("Try again")
+                .accessibilityLabel(exhausted ? "Edit keys" : "Try again")
 
                 Button {
                     ouraScanner.stop()
@@ -1012,13 +1092,36 @@ struct AddDeviceWizard: View {
         }
     }
 
-    /// The Advanced key field parsed into 16 raw bytes, or nil when it is not exactly 32 hex characters.
-    /// Used to gate the Advanced Scan button and to seed the install-key store on adoption.
-    private var ouraKeyBytes: Data? {
-        let hex = ouraKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard hex.count == OuraKeyStore.keyLength * 2 else { return nil }
+    /// The Advanced key field parsed into de-duplicated 16-byte candidate keys (order preserved). Tokens are
+    /// split on newlines / commas / whitespace, so the user can paste one key per line (the common case when
+    /// several rings' keys were extracted) or a single key. A token that is not exactly 32 hex characters is
+    /// ignored here (surfaced as a hint in the field). Used to gate the Scan button and seed the key trial.
+    private var ouraCandidateKeys: [Data] {
+        var out: [Data] = []
+        var seen = Set<Data>()
+        for token in ouraKeyDraft.split(whereSeparator: { $0.isNewline || $0 == "," || $0 == " " }) {
+            let hex = token.trimmingCharacters(in: .whitespaces).lowercased()
+            guard hex.count == OuraKeyStore.keyLength * 2, let data = Self.hexToData(hex) else { continue }
+            if seen.insert(data).inserted { out.append(data) }
+        }
+        return out
+    }
+
+    /// How many non-empty tokens in the field are NOT a valid 32-hex key, so the field can hint honestly
+    /// ("2 of 3 lines aren't 32-char hex keys") without blocking the valid ones.
+    private var ouraMalformedKeyCount: Int {
+        ouraKeyDraft.split(whereSeparator: { $0.isNewline || $0 == "," || $0 == " " })
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+            .filter { $0.count != OuraKeyStore.keyLength * 2 || Self.hexToData($0) == nil }
+            .count
+    }
+
+    /// Parse an even-length lowercase hex string into raw bytes, or nil on any non-hex character.
+    private static func hexToData(_ hex: String) -> Data? {
+        guard hex.count % 2 == 0 else { return nil }
         var bytes = [UInt8]()
-        bytes.reserveCapacity(OuraKeyStore.keyLength)
+        bytes.reserveCapacity(hex.count / 2)
         var idx = hex.startIndex
         while idx < hex.endIndex {
             let next = hex.index(idx, offsetBy: 2)
@@ -1221,7 +1324,9 @@ struct AddDeviceWizard: View {
             ouraScanner.scan()
             pickedOura = nil
             ouraStep = .pick
-        case .adopting, .failed:
+        case .adopting, .verifyingKeys, .failed:
+            // Back is suppressed during adopting/verifying (showBack), so this is only reached from .failed;
+            // re-scan and return to the ring picker defensively.
             ouraScanner.scan()
             pickedOura = nil
             ouraStep = .pick
@@ -1313,7 +1418,7 @@ struct AddDeviceWizard: View {
                 status: .paired,
                 addedAt: now, lastSeenAt: now)
         } else {
-            // The Oura type commits through its own `commitOuraAdopt` / `finishAdvancedOura`, never here.
+            // The Oura type commits through its own `commitOuraAdopt` / `commitOuraKeyTrial`, never here.
             onClose(); return
         }
 
@@ -1360,18 +1465,18 @@ struct AddDeviceWizard: View {
         model.adoptOuraRing(device)   // grants adopt consent + registers active; never prompts make-active
     }
 
-    /// COMMIT the non-destructive Advanced-key path: persist the user-supplied 16-byte key, register the ring
-    /// active (it authenticates with that key, no reset, no install), then close. This path NEVER installs a
-    /// key and NEVER passes through the Adopting/Take-over gates. Validates the key first (the Scan button was
-    /// already gated on a valid key, so this is belt-and-braces).
-    private func finishAdvancedOura() {
-        guard let device = buildOuraDevice(), let key = ouraKeyBytes else { onClose(); return }
+    /// COMMIT the non-destructive Advanced-key path: register the ring active and start a live key TRIAL that
+    /// authenticates each supplied candidate key against the ring in turn, keeping the first that works (and
+    /// saving ONLY that one). No reset, no key install, and it never passes through the Adopting/Take-over
+    /// gates. The wizard moves to its honest `verifyingKeys` step, which the live source's key-trial phase
+    /// drives to success (close) or an exhausted dead-end. The Verify button was already gated on ≥1 valid
+    /// candidate, so this is belt-and-braces.
+    private func commitOuraKeyTrial() {
+        let keys = ouraCandidateKeys
+        guard let device = buildOuraDevice(), !keys.isEmpty else { onClose(); return }
         stopAllScans()
-        OuraKeyStore.save(key, deviceId: device.id)
-        // The user supplied their own key; this is their new live source. Register active (no adopt consent,
-        // so the live source can NEVER install a key on this path).
-        model.registerDevice(device, makeActive: true)
-        onClose()
+        ouraStep = .verifyingKeys
+        model.verifyOuraKeys(device, keys: keys)   // arms the trial + registers active; never installs a key
     }
 
     /// Map the protocol package's per-gen `OuraMetric` set onto the app's `Metric` set for registration.
