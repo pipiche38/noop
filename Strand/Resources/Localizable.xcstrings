@@ -194922,6 +194922,786 @@
         }
       }
     },
+    "Ring key(s) (32 hex characters, one per line)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ring-Schlüssel (32 Hex-Zeichen, einer pro Zeile)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clave(s) del anillo (32 caracteres hexadecimales, una por línea)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé(s) de l'anneau (32 caractères hexadécimaux, une par ligne)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave/i dell'anello (32 caratteri esadecimali, una per riga)"
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave(s) do anel (32 caracteres hexadecimais, uma por linha)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ключ(и) кольца (32 шестнадцатеричных символа, по одному в строке)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "戒指密钥（32 个十六进制字符，每行一个）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "戒指金鑰（32 個十六進位字元，每行一個）"
+          }
+        }
+      }
+    },
+    "Ring keys, 32 hexadecimal characters each, one per line": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ring-Schlüssel, je 32 Hexadezimalzeichen, einer pro Zeile"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claves del anillo, 32 caracteres hexadecimales cada una, una por línea"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clés de l'anneau, 32 caractères hexadécimaux chacune, une par ligne"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiavi dell'anello, 32 caratteri esadecimali ciascuna, una per riga"
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chaves do anel, 32 caracteres hexadecimais cada, uma por linha"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ключи кольца, по 32 шестнадцатеричных символа, по одному в строке"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "戒指密钥，每个 32 个十六进制字符，每行一个"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "戒指金鑰，每個 32 個十六進位字元，每行一個"
+          }
+        }
+      }
+    },
+    "1 candidate key ready to try.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Schlüsselkandidat bereit zum Testen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 clave candidata lista para probar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 clé candidate prête à être testée."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 chiave candidata pronta da provare."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 chave candidata pronta a testar."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 ключ-кандидат готов к проверке."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 个候选密钥待尝试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 個候選金鑰待嘗試。"
+          }
+        }
+      }
+    },
+    "%lld candidate keys ready — NOOP will try each and keep the one that works.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Schlüsselkandidaten bereit – NOOP testet jeden und behält den funktionierenden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld claves candidatas listas: NOOP probará cada una y conservará la que funcione."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld clés candidates prêtes — NOOP essaiera chacune et conservera celle qui fonctionne."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld chiavi candidate pronte: NOOP le proverà tutte e terrà quella che funziona."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld chaves candidatas prontas — o NOOP testa cada uma e mantém a que funcionar."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово ключей-кандидатов: %lld — NOOP проверит каждый и оставит подходящий."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 个候选密钥待尝试 —— NOOP 会逐个尝试并保留有效的那个。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 個候選金鑰待嘗試 —— NOOP 會逐個嘗試並保留有效的那個。"
+          }
+        }
+      }
+    },
+    "One line isn't a 32-character hex key — it will be skipped.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eine Zeile ist kein 32-Zeichen-Hex-Schlüssel – sie wird übersprungen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una línea no es una clave hexadecimal de 32 caracteres: se omitirá."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une ligne n'est pas une clé hexadécimale de 32 caractères — elle sera ignorée."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una riga non è una chiave esadecimale di 32 caratteri: verrà ignorata."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uma linha não é uma chave hexadecimal de 32 caracteres — será ignorada."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Одна строка не является 32-символьным шестнадцатеричным ключом — она будет пропущена."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有一行不是 32 个字符的十六进制密钥 —— 将被跳过。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有一行不是 32 個字元的十六進位金鑰 —— 將被略過。"
+          }
+        }
+      }
+    },
+    "%lld lines aren't 32-character hex keys — they will be skipped.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Zeilen sind keine 32-Zeichen-Hex-Schlüssel – sie werden übersprungen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld líneas no son claves hexadecimales de 32 caracteres: se omitirán."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld lignes ne sont pas des clés hexadécimales de 32 caractères — elles seront ignorées."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld righe non sono chiavi esadecimali di 32 caratteri: verranno ignorate."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld linhas não são chaves hexadecimais de 32 caracteres — serão ignoradas."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Строк, не являющихся 32-символьными шестнадцатеричными ключами: %lld — они будут пропущены."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有 %lld 行不是 32 个字符的十六进制密钥 —— 将被跳过。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有 %lld 行不是 32 個字元的十六進位金鑰 —— 將被略過。"
+          }
+        }
+      }
+    },
+    "NOOP stores the working key only on this device, in the same place it stores your paired bands. Keys that don't authenticate are never saved.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP speichert den funktionierenden Schlüssel nur auf diesem Gerät, am selben Ort wie deine gekoppelten Bänder. Schlüssel, die sich nicht authentifizieren, werden nie gespeichert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP guarda la clave que funciona solo en este dispositivo, en el mismo lugar donde guarda tus bandas emparejadas. Las claves que no se autentican nunca se guardan."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP conserve la clé qui fonctionne uniquement sur cet appareil, au même endroit que vos bracelets appairés. Les clés qui ne s'authentifient pas ne sont jamais enregistrées."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP salva la chiave funzionante solo su questo dispositivo, nello stesso posto in cui salva i tuoi bracciali associati. Le chiavi che non si autenticano non vengono mai salvate."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O NOOP guarda a chave que funciona apenas neste dispositivo, no mesmo local onde guarda as suas bandas emparelhadas. As chaves que não autenticam nunca são guardadas."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP хранит рабочий ключ только на этом устройстве, там же, где хранятся сопряжённые браслеты. Ключи, которые не прошли проверку, никогда не сохраняются."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP 只在本设备上保存有效的密钥，与已配对手环存放在同一处。未通过验证的密钥永远不会被保存。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP 只在本裝置上儲存有效的金鑰，與已配對手環存放在同一處。未通過驗證的金鑰永遠不會被儲存。"
+          }
+        }
+      }
+    },
+    "Verify this key": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diesen Schlüssel prüfen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar esta clave"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifier cette clé"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica questa chiave"
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar esta chave"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить этот ключ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "验证此密钥"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "驗證此金鑰"
+          }
+        }
+      }
+    },
+    "Verify these %lld keys": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese %lld Schlüssel prüfen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar estas %lld claves"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifier ces %lld clés"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica queste %lld chiavi"
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar estas %lld chaves"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить эти ключи (%lld)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "验证这 %lld 个密钥"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "驗證這 %lld 個金鑰"
+          }
+        }
+      }
+    },
+    "Verifying your key": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schlüssel wird geprüft"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificando tu clave"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification de votre clé"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica della chiave in corso"
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A verificar a sua chave"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка ключа"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在验证密钥"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在驗證金鑰"
+          }
+        }
+      }
+    },
+    "Trying key %lld of %lld against the ring. NOOP keeps the first one that authenticates.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schlüssel %lld von %lld wird am Ring getestet. NOOP behält den ersten, der sich authentifiziert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Probando la clave %lld de %lld en el anillo. NOOP conserva la primera que se autentique."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Essai de la clé %lld sur %lld avec l'anneau. NOOP conserve la première qui s'authentifie."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prova della chiave %lld di %lld sull'anello. NOOP tiene la prima che si autentica."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A testar a chave %lld de %lld no anel. O NOOP mantém a primeira que autenticar."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка ключа %lld из %lld на кольце. NOOP оставит первый успешный."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在用第 %lld 个密钥（共 %lld 个）连接戒指。NOOP 会保留第一个通过验证的密钥。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在用第 %lld 個金鑰（共 %lld 個）連接戒指。NOOP 會保留第一個通過驗證的金鑰。"
+          }
+        }
+      }
+    },
+    "Authenticating with the ring using your key. Keep the ring close. This does not reset the ring — the Oura app keeps working.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authentifizierung am Ring mit deinem Schlüssel. Halte den Ring in der Nähe. Der Ring wird dabei nicht zurückgesetzt – die Oura-App funktioniert weiter."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autenticando con el anillo mediante tu clave. Mantén el anillo cerca. Esto no restablece el anillo: la app de Oura sigue funcionando."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authentification auprès de l'anneau avec votre clé. Gardez l'anneau à proximité. L'anneau n'est pas réinitialisé — l'app Oura continue de fonctionner."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autenticazione con l'anello tramite la tua chiave. Tieni l'anello vicino. L'anello non viene reimpostato: l'app Oura continua a funzionare."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A autenticar no anel com a sua chave. Mantenha o anel por perto. Isto não repõe o anel — a app Oura continua a funcionar."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аутентификация на кольце с помощью вашего ключа. Держите кольцо рядом. Кольцо не сбрасывается — приложение Oura продолжит работать."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在使用你的密钥与戒指进行认证。请让戒指保持在附近。这不会重置戒指 —— Oura 应用仍可正常使用。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在使用你的金鑰與戒指進行驗證。請讓戒指保持在附近。這不會重設戒指 —— Oura 應用程式仍可正常使用。"
+          }
+        }
+      }
+    },
+    "None of those keys authenticated this ring.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keiner dieser Schlüssel hat sich an diesem Ring authentifiziert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ninguna de esas claves autenticó este anillo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune de ces clés n'a authentifié cet anneau."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessuna di queste chiavi ha autenticato questo anello."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhuma dessas chaves autenticou este anel."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ни один из этих ключей не подошёл к этому кольцу."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这些密钥都无法验证此戒指。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "這些金鑰都無法驗證此戒指。"
+          }
+        }
+      }
+    },
+    "NOOP tried every key you gave it and the ring rejected all of them, so nothing was saved. Double-check you copied the full 32-character keys and that they belong to THIS ring (the id in a backup is not the same as the Bluetooth ring you picked). You can edit the keys and try again, or use file import.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP hat jeden angegebenen Schlüssel getestet und der Ring hat alle abgelehnt, daher wurde nichts gespeichert. Prüfe, ob du die vollständigen 32-Zeichen-Schlüssel kopiert hast und ob sie zu DIESEM Ring gehören (die ID in einem Backup ist nicht dieselbe wie der ausgewählte Bluetooth-Ring). Du kannst die Schlüssel bearbeiten und es erneut versuchen oder den Dateiimport nutzen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP probó todas las claves que le diste y el anillo las rechazó todas, así que no se guardó nada. Comprueba que copiaste las claves completas de 32 caracteres y que pertenecen a ESTE anillo (el id de una copia de seguridad no es el mismo que el anillo Bluetooth que elegiste). Puedes editar las claves y volver a intentarlo, o usar la importación de archivos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP a essayé toutes les clés fournies et l'anneau les a toutes rejetées ; rien n'a donc été enregistré. Vérifiez que vous avez copié les clés complètes de 32 caractères et qu'elles appartiennent à CET anneau (l'identifiant d'une sauvegarde n'est pas celui de l'anneau Bluetooth sélectionné). Vous pouvez modifier les clés et réessayer, ou utiliser l'import de fichier."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP ha provato tutte le chiavi fornite e l'anello le ha rifiutate tutte, quindi non è stato salvato nulla. Verifica di aver copiato le chiavi complete da 32 caratteri e che appartengano a QUESTO anello (l'id in un backup non è lo stesso dell'anello Bluetooth selezionato). Puoi modificare le chiavi e riprovare, oppure usare l'importazione da file."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O NOOP testou todas as chaves que indicou e o anel rejeitou-as todas, pelo que nada foi guardado. Confirme que copiou as chaves completas de 32 caracteres e que pertencem a ESTE anel (o id numa cópia de segurança não é o mesmo que o anel Bluetooth que escolheu). Pode editar as chaves e tentar novamente, ou usar a importação de ficheiro."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP проверил все указанные ключи, и кольцо отклонило каждый из них, поэтому ничего не сохранено. Убедитесь, что скопированы полные 32-символьные ключи и что они относятся именно к ЭТОМУ кольцу (идентификатор в резервной копии — не то же самое, что выбранное Bluetooth-кольцо). Можно изменить ключи и повторить попытку или воспользоваться импортом из файла."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP 已尝试你提供的每一个密钥，戒指全部拒绝，因此没有保存任何内容。请确认你复制的是完整的 32 个字符密钥，并且属于「这枚」戒指（备份中的 id 与你选择的蓝牙戒指并不相同）。你可以编辑密钥后重试，或改用文件导入。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP 已嘗試你提供的每一個金鑰，戒指全部拒絕，因此沒有儲存任何內容。請確認你複製的是完整的 32 個字元金鑰，並且屬於「這枚」戒指（備份中的 id 與你選擇的藍牙戒指並不相同）。你可以編輯金鑰後重試，或改用檔案匯入。"
+          }
+        }
+      }
+    },
+    "Edit keys": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schlüssel bearbeiten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Editar claves"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modifier les clés"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modifica chiavi"
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Editar chaves"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменить ключи"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "编辑密钥"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編輯金鑰"
+          }
+        }
+      }
+    },
     "Your strap recorded little movement overnight (common on WHOOP 4.0), so this night may be under-detected and the sleep total can read short. Make sure the strap fully synced; the numbers are kept as-is.": {
       "localizations": {
         "de": {
