@@ -82,6 +82,20 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// to `.idle` on every connect/stop/disconnect so a stale outcome never drives a transition.
     @Published public private(set) var adoptPhase: AdoptPhase = .idle
 
+    /// The live outcome of an Advanced "I have my ring's key(s)" verification: NOOP tries each supplied
+    /// candidate key against the ring in turn (one per connection) and the FIRST to authenticate is the
+    /// winner. The wizard observes this to drive its "Verifying your key" step to success or an honest
+    /// "none of these keys authenticated the ring" dead-end. `nil` when no trial is in flight. This is a
+    /// READ-ONLY verification: `adoptIntent` is false on this path, so the dangerous `0x24` install is
+    /// NEVER sequenced — a wrong candidate simply fails auth and the next one is tried.
+    public enum KeyTrialPhase: Equatable, Sendable {
+        case trying(attempt: Int, total: Int)     // 1-based candidate `attempt` of `total` is authenticating now
+        case succeeded(attempt: Int, total: Int)  // candidate `attempt` authenticated and was saved as the ring's key
+        case exhausted(total: Int)                // every candidate was rejected; nothing was saved
+    }
+    /// The live key-trial outcome (see `KeyTrialPhase`). Reset to `nil` whenever a trial starts fresh.
+    @Published public private(set) var keyTrialPhase: KeyTrialPhase? = nil
+
     // MARK: - BLE UUIDs (from the platform-pure OuraGatt facts)
 
     /// The Oura base service (gen3/4/5). `OuraGatt` keeps the raw strings so the package stays
@@ -312,6 +326,23 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// ONLY on an OK ack (so a failed/absent ack never leaves a key the next session would wrongly trust).
     /// Cleared on stop/disconnect/failure.
     private var pendingInstallKey: Data?
+
+    // MARK: - Advanced key-trial state (the "I already have my ring's key(s)" verification)
+
+    /// The candidate 16-byte keys to try against the ring, in order. Held in memory ONLY for the duration of
+    /// a trial and NEVER persisted until one authenticates — so a wrong candidate never leaves a key behind
+    /// that a later session would wrongly trust. Empty when no trial is running.
+    private var trialKeys: [Data] = []
+    /// Index of the candidate currently being authenticated (into `trialKeys`).
+    private var trialIndex = 0
+    /// True while a key trial is in flight: it makes `didConnect` authenticate with `trialKeys[trialIndex]`
+    /// (in preference to the keystore), and makes an auth failure advance to the next candidate rather than
+    /// announce an honest dead-end. Cleared the instant a candidate wins or the list is exhausted.
+    private var trialActive = false
+    /// Set between cancelling the link for a failed candidate and the disconnect that follows, so the
+    /// disconnect handler reconnects IMMEDIATELY to try the next candidate (bypassing the backoff/announce
+    /// paths) instead of scheduling a normal auto-reconnect.
+    private var pendingTrialReconnect = false
 
     // MARK: - CoreBluetooth state (OWN central, separate from WHOOP)
 
@@ -916,6 +947,67 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         central.connect(p, options: nil)
     }
 
+    // MARK: - Advanced key trial ("I already have my ring's key(s)")
+
+    /// Begin an Advanced key verification: try each supplied candidate key against the ring, authenticating
+    /// with one per connection, and keep the FIRST that reaches streaming (persisting only the winner to the
+    /// keystore). This is the power-user path for someone who extracted their ring's app key from a previous
+    /// Oura setup — NOOP does not reset the ring, so the Oura app keeps working, and it never installs a key
+    /// (the trial is built with `adoptIntent == false`, so the dangerous `0x24` opcode can never be sent).
+    ///
+    /// Candidates are filtered to exactly 16 bytes and de-duplicated (order preserved); a run with no valid
+    /// candidate is a no-op. Publishes `keyTrialPhase` throughout so the wizard can show honest per-candidate
+    /// progress and land on success or an exhausted dead-end.
+    public func beginKeyTrial(_ keys: [Data], connectTo id: UUID) {
+        var seen = Set<Data>()
+        let valid = keys.filter { $0.count == OuraKeyStore.keyLength && seen.insert($0).inserted }
+        guard !valid.isEmpty else { return }
+        trialKeys = valid
+        trialIndex = 0
+        trialActive = true
+        pendingTrialReconnect = false
+        keyTrialPhase = .trying(attempt: 1, total: valid.count)
+        log("Oura: key trial - verifying \(valid.count) candidate key(s) against the ring")
+        connect(id)
+    }
+
+    /// Handle a candidate that failed to authenticate (auth rejected, or the ring wanted a key install we
+    /// won't do on this non-destructive path): advance to the next candidate and reconnect to re-run the
+    /// handshake with it. When none remain, end the trial honestly — nothing is persisted and the link is
+    /// dropped cleanly (the wizard shows the exhausted dead-end from `keyTrialPhase`). `status` is the raw
+    /// auth-reject code when there was one (nil when the ring asked for an install instead).
+    private func advanceKeyTrial(after status: UInt8?) {
+        let failed = trialIndex + 1
+        let reason = status.map { "auth status \($0)" } ?? "ring wanted a key install (not attempted)"
+        log("Oura: key trial - candidate \(failed)/\(trialKeys.count) rejected (\(reason))")
+        trialIndex += 1
+        guard trialIndex < trialKeys.count else {
+            let total = trialKeys.count
+            keyTrialPhase = .exhausted(total: total)
+            log("Oura: key trial - all \(total) candidate key(s) were rejected; none saved")
+            trialActive = false
+            trialKeys.removeAll()
+            // Honest dead-end: drop the link like a deliberate stop (no announce text, no auto-reconnect).
+            intentionalDisconnect = true
+            reconnectID = nil
+            failedReconnectAttempts = 0
+            pendingTrialReconnect = false
+            if let p = peripheral { central.cancelPeripheralConnection(p) }
+            if feedsLive { live.connected = false; live.streamingLiveHR = false }
+            return
+        }
+        keyTrialPhase = .trying(attempt: trialIndex + 1, total: trialKeys.count)
+        // Reconnect to re-run auth with the next candidate. A fresh connection rebuilds the driver, which
+        // reads the now-advanced trial key in `didConnect`. This is NOT an involuntary drop, so route it
+        // through `pendingTrialReconnect` (immediate reconnect, no backoff) instead of `scheduleReconnect`.
+        if let p = peripheral {
+            pendingTrialReconnect = true
+            central.cancelPeripheralConnection(p)
+        } else if let id = reconnectID {
+            connect(id)
+        }
+    }
+
     /// Tear down: cancel the connection, stop scanning, flush, clear all transient state. Idempotent.
     public func stop() {
         // A deliberate teardown (device switch / removal) must NOT auto-reconnect: mark it intentional and
@@ -923,6 +1015,13 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         intentionalDisconnect = true
         reconnectID = nil
         failedReconnectAttempts = 0
+        // A deliberate teardown mid key-trial (the user cancelled the wizard) abandons the trial so a stale
+        // pending reconnect can't fire against the next candidate after we've torn down. The published
+        // `keyTrialPhase` is left as-is: the next `beginKeyTrial` resets it, and the wizard already left.
+        trialActive = false
+        trialKeys.removeAll()
+        trialIndex = 0
+        pendingTrialReconnect = false
         stopScan()
         pendingConnectID = nil
         stopReengageTimer()
@@ -1004,17 +1103,38 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         case .needsKeyInstall:
             // A factory-reset ring (auth status inFactoryReset) or no key available. The dangerous key
             // install is the ONLY thing that recovers it, and ONLY with explicit adopt consent: provision
-            // when `adoptIntent`, otherwise stay honest (never loop the dangerous command).
-            if adoptIntent {
+            // when `adoptIntent`, otherwise stay honest (never loop the dangerous command). On the key-trial
+            // path there is no adopt consent, so treat "wanted an install" as this candidate not working and
+            // move on to the next one.
+            if trialActive {
+                advanceKeyTrial(after: nil)
+            } else if adoptIntent {
                 provisionKeyInstall()
             } else {
                 announceNeedsPairing(reason: .factoryResetOrNoKey)
             }
         case .authFailed(let status):
-            announceNeedsPairing(reason: .authFailed(status))
+            // A rejected candidate during a key trial advances to the next key rather than ending honestly.
+            if trialActive {
+                advanceKeyTrial(after: status.rawValue)
+            } else {
+                announceNeedsPairing(reason: .authFailed(status))
+            }
         case .streaming:
             if !reachedStreaming {
                 reachedStreaming = true
+                // A key trial that reaches streaming has found its winner: persist THIS candidate (the first
+                // to authenticate) and end the trial. Nothing was written to the keystore until now, so the
+                // rejected candidates never left a key behind.
+                if trialActive {
+                    let winner = trialKeys[trialIndex]
+                    OuraKeyStore.save(winner, deviceId: deviceId)
+                    keyTrialPhase = .succeeded(attempt: trialIndex + 1, total: trialKeys.count)
+                    log("Oura: key trial - candidate \(trialIndex + 1)/\(trialKeys.count) AUTHENTICATED and was saved as this ring's key")
+                    trialActive = false
+                    trialKeys.removeAll()
+                    pendingTrialReconnect = false
+                }
                 adoptPhase = .streaming   // re-auth after an install (or a normal auth) reached the stream: adoption complete
                 pendingInstallKey = nil   // an OK ack already persisted the key; nothing left in flight
                 if feedsLive { live.streamingLiveHR = true }   // drive the green menu-bar STREAMING pill (no WHOOP bond)
@@ -1710,8 +1830,16 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         // ring actually sends (raw bytes per kind, decoded MET for 0x50) so the layouts can be validated
         // against real captures. It can never leak a value into scoring: OuraStreamMapping drops
         // .tierB/.activityInfo unconditionally - the Tier-discipline gate that matters lives there, not here.
+        // During an Advanced key trial, authenticate with the current candidate (in memory, never yet
+        // persisted) in preference to the keystore; otherwise use the stored install key. `adoptIntent` is
+        // always false on the trial path, so `allowKeyInstall` stays false and the dangerous `0x24` opcode
+        // can never be sequenced while probing candidates.
+        let sessionKey: Data? = (trialActive && trialIndex < trialKeys.count) ? trialKeys[trialIndex] : authKey()
+        if trialActive {
+            log("Oura: key trial - authenticating with candidate \(trialIndex + 1)/\(trialKeys.count)")
+        }
         driver = OuraDriver(ringGen: ringGen,
-                            authKey: authKey().map { [UInt8]($0) },
+                            authKey: sessionKey.map { [UInt8]($0) },
                             allowTierB: true,
                             allowKeyInstall: adoptIntent)
         reachedStreaming = false
@@ -1826,6 +1954,15 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         flush()
         if feedsLive { live.connected = false; live.streamingLiveHR = false }
         if self.peripheral?.identifier == peripheral.identifier { self.peripheral = nil }
+        // A key trial that just cancelled the link to try the NEXT candidate reconnects immediately (no
+        // backoff): the fresh connection rebuilds the driver, which authenticates with the advanced trial
+        // key. This is checked before `scheduleReconnect` so a trial retry never waits on the backoff.
+        if pendingTrialReconnect, let id = reconnectID {
+            pendingTrialReconnect = false
+            log("Oura: key trial - reconnecting to try candidate \(trialIndex + 1)/\(trialKeys.count)")
+            connect(id)
+            return
+        }
         // Auto-reconnect on an INVOLUNTARY drop (#912): the paired ring went out of range or the link timed
         // out. Re-issue a connect on the backoff so it comes back on its own, exactly like the WHOOP strap.
         // A deliberate `stop()` set `intentionalDisconnect`/cleared `reconnectID`, so this is a no-op there.
