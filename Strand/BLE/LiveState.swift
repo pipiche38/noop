@@ -620,13 +620,19 @@ public final class LiveState: ObservableObject {
         (UserDefaults.standard.array(forKey: tailKey) as? [String]) ?? []
     }
 
-    /// TEMPORARY test-branch marker (`test/oura-sleep-hrv-combined`) — hardcoded so an exported strap log
-    /// can be matched to the exact source commit it was built from. This branch's Oura decoders (0x81
-    /// CVA-PPG, 0x7E/0x7F real-steps, …) move faster than `MARKETING_VERSION` bumps, so the version string
-    /// alone can't tell an export apart from a same-numbered build off `main`. Bump the hash before each
-    /// build/export on this branch (`git rev-parse --short=8 HEAD`); delete this whole property + its two
-    /// call sites before this branch merges to `main` — it must never ship.
-    nonisolated static let testBranchMarker = "Branch: test/oura-sleep-hrv-combined @ 62b15c6a"
+    /// Integration-branch build marker — lets an exported strap log be matched to the exact source commit
+    /// it was built from. An integration branch's Oura decoders (0x81 CVA-PPG, 0x7E/0x7F real-steps, …)
+    /// move faster than `MARKETING_VERSION` bumps, so the version string alone can't tell an export apart
+    /// from a same-numbered build off `main`. The value is NOT hardcoded: `noop-build.sh` computes
+    /// `<branch>@<short-sha>` and passes it as the `NOOP_BUILD_MARKER` build setting, which XcodeGen
+    /// surfaces through the `NOOPBuildMarker` Info.plist key. The script sets it **only on `integration/*`
+    /// branches**, so a `main` build carries an empty key and this returns nil — no marker line is emitted
+    /// and nothing branch-specific ships.
+    nonisolated static var buildMarker: String? {
+        guard let m = Bundle.main.infoDictionary?["NOOPBuildMarker"] as? String,
+              !m.isEmpty else { return nil }
+        return "Branch: " + m
+    }
 
     /// A shareable strap-log body sourced from the DURABLE tail, for a background / scheduled export that
     /// runs with no live `LiveState` instance. Mirrors `exportableLogText()`'s header so a scheduled drop
@@ -641,7 +647,7 @@ public final class LiveState: ObservableObject {
         #endif
         var header = "NOOP strap log (scheduled export) — \(osName)\nApp: \(v)\n\(osName): "
             + ProcessInfo.processInfo.operatingSystemVersionString + "\n"
-        header += testBranchMarker + "\n"
+        if let marker = buildMarker { header += marker + "\n" }
         if !extraHeaderLines.isEmpty { header += extraHeaderLines.joined(separator: "\n") + "\n" }
         header += String(repeating: "-", count: 40) + "\n"
         return header + persistedLogTail().joined(separator: "\n")
@@ -685,7 +691,7 @@ public final class LiveState: ObservableObject {
         #endif
         var header = "NOOP strap log - \(osName)\nApp: \(v)\n\(osName): "
             + ProcessInfo.processInfo.operatingSystemVersionString + "\n"
-        header += Self.testBranchMarker + "\n"
+        if let marker = Self.buildMarker { header += marker + "\n" }
         #if os(iOS)
         let diagLines = IOSDiagnostics.capture().summaryLines()
         if !diagLines.isEmpty { header += diagLines.joined(separator: "\n") + "\n" }

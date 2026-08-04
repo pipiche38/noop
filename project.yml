@@ -96,6 +96,11 @@ targets:
         CFBundleDisplayName: NOOP
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "198"
+        # Build-provenance marker for exported strap logs / Test Centre report.txt (LiveState.buildMarker).
+        # Fed by the NOOP_BUILD_MARKER build setting, which noop-build.sh sets to "<branch>@<short-sha>"
+        # ONLY on an integration/* branch; undefined elsewhere, so the key expands empty and the marker
+        # line is omitted. Never hardcode a branch name here.
+        NOOPBuildMarker: "$(NOOP_BUILD_MARKER)"
         LSMinimumSystemVersion: "13.0"
         LSApplicationCategoryType: public.app-category.healthcare-fitness
         NSBluetoothAlwaysUsageDescription: "NOOP connects directly to your WHOOP strap over Bluetooth to read heart rate, R-R intervals, battery, and sensor data locally on your Mac. Nothing leaves your device."
@@ -222,6 +227,11 @@ targets:
         CFBundleDisplayName: NOOP
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # Build-provenance marker for exported strap logs / Test Centre report.txt (LiveState.buildMarker).
+        # Fed by the NOOP_BUILD_MARKER build setting, which noop-build.sh sets to "<branch>@<short-sha>"
+        # ONLY on an integration/* branch; undefined elsewhere, so the key expands empty and the marker
+        # line is omitted. Never hardcode a branch name here.
+        NOOPBuildMarker: "$(NOOP_BUILD_MARKER)"
         # Surfaces APP_GROUP_ID to runtime (WidgetSnapshot.suiteName) so the App Group id isn't
         # hard-coded in Swift; stays in sync with the application-groups entitlement (both $(APP_GROUP_ID)).
         AppGroupIdentifier: "$(APP_GROUP_ID)"
