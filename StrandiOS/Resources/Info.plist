@@ -54,6 +54,8 @@
 	<string>public.app-category.healthcare-fitness</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NOOPBuildMarker</key>
+	<string>$(NOOP_BUILD_MARKER)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
