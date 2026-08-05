@@ -237,6 +237,7 @@ public enum OuraStreamMapping {
         case .greenQuality:  return .greenQuality
         case .spo2Ibi:       return .spo2Ibi
         case .ibiAmplitude:  return .ibiAmplitude
+        case .ibiBare:       return .ibiBare
         case nil:            return nil
         }
     }
