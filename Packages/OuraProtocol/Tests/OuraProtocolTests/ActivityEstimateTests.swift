@@ -88,66 +88,50 @@ final class ActivityEstimateTests: XCTestCase {
         XCTAssertEqual(e.estActiveKcal!, 0.47, accuracy: 0.01)
     }
 
-    // MARK: - Walking-equivalent step estimate (diagnostic, NOT a step count)
+    // MARK: - There must be NO step estimate (regression guard, 2026-08-07)
 
-    /// The estimate is exactly `activeMinutes × stepsPerActiveMinute`, so a log line can be audited from
-    /// the two figures printed beside it. 10 samples at MET 5 with a 60 s epoch = 10 active minutes.
-    func testWalkingEquivalentStepsIsActiveMinutesTimesCadence() {
-        let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 5.0, count: 10), epochSeconds: 60)
-        XCTAssertEqual(e.activeMinutes, 10, accuracy: 0.001)
-        XCTAssertEqual(e.estStepsWalkingEquivalent ?? -1,
-                       10 * OuraActivityEstimator.stepsPerActiveMinute, accuracy: 0.001)
+    /// The walking-equivalent step estimate was REMOVED after a controlled falsifier refuted it: a
+    /// 23-minute open-water swim with a ground truth of ZERO steps held MET 4.3-7.9, and 20 of its 24
+    /// minutes cleared MET >= 3.0 — 2,000 phantom steps. These tests replace the ones that used to pin
+    /// `stepsPerActiveMinute` / `maxTrustedActiveMinutes`, and exist so the field cannot quietly return.
+    ///
+    /// The check is structural rather than a compile-time absence: `OuraActivityEstimate` is `Equatable`,
+    /// so re-adding any derived member changes the value produced by the memberwise init and this fails.
+
+    /// A hard-exertion, ZERO-step window must produce active minutes (that part is honest and true) and
+    /// **nothing that could be read as a distance or a count**. This is the swim, in miniature: 24 samples
+    /// at the MET levels actually observed, 20 of which clear the 3.0 threshold.
+    func testZeroStepSwimYieldsActiveMinutesButNoStepFigure() {
+        let swim: [Double] = [1.2, 2.9, 7.9, 7.2, 4.6, 5.5, 5.4, 5.8, 5.3, 5.8, 4.4, 4.7,
+                              5.3, 3.4, 1.6, 2.2, 5.7, 4.6, 4.3, 5.1, 5.7, 5.3, 5.7, 5.1]
+        let e = OuraActivityEstimator.estimate(metSamples: swim, epochSeconds: 60)
+        XCTAssertEqual(e.activeMinutes, 20, accuracy: 0.001,
+                       "20 of the 24 swim minutes clear MET >= 3.0 — that is the measured fact")
+        // The estimate must be fully described by the honest aggregates. If a step field (or any other
+        // derived member) is re-added, the memberwise value below stops matching and this test fails.
+        XCTAssertEqual(e, OuraActivityEstimate(sampleCount: 24, epochSeconds: 60,
+                                               meanMET: e.meanMET, maxMET: 7.9,
+                                               metMinutes: e.metMinutes, activeMinutes: 20,
+                                               estActiveKcal: nil, estTotalKcal: nil),
+                       "OuraActivityEstimate must carry ONLY the honest MET aggregates — no step figure")
     }
 
-    /// A wholly sedentary day has NO active minutes, so the walking-equivalent must be exactly 0 — never a
-    /// residual "some steps" figure invented out of resting MET.
-    func testSedentaryDayEstimatesZeroSteps() {
+    /// The same window at a HIGHER threshold still yields active minutes, which is exactly why raising the
+    /// threshold was never a fix: the swim genuinely was a 4-8 MET effort. Guards the tempting "just use
+    /// MET >= 5" rescue.
+    func testRaisingTheThresholdDoesNotRescueTheZeroStepCase() {
+        let swim: [Double] = [1.2, 2.9, 7.9, 7.2, 4.6, 5.5, 5.4, 5.8, 5.3, 5.8, 4.4, 4.7,
+                              5.3, 3.4, 1.6, 2.2, 5.7, 4.6, 4.3, 5.1, 5.7, 5.3, 5.7, 5.1]
+        let e = OuraActivityEstimator.estimate(metSamples: swim, epochSeconds: 60,
+                                               moderateThresholdMET: 5.0)
+        XCTAssertEqual(e.activeMinutes, 14, accuracy: 0.001,
+                       "even at MET >= 5.0 the zero-step swim still reads 14 active minutes")
+    }
+
+    /// A wholly sedentary day has NO active minutes — never a residual figure invented out of resting MET.
+    func testSedentaryDayHasNoActiveMinutes() {
         let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 1.0, count: 500), epochSeconds: 60)
         XCTAssertEqual(e.activeMinutes, 0, accuracy: 0.001)
-        XCTAssertEqual(e.estStepsWalkingEquivalent ?? -1, 0, accuracy: 0.001)
-    }
-
-    /// Reproduces the calibration day: 113 active minutes against 11,167 MEASURED steps. The estimate must
-    /// land within ~15 % of the real figure — this pins the constant against the ground truth it came from,
-    /// so a future edit to `stepsPerActiveMinute` that drifts away from reality fails here.
-    func testMatchesTheMeasuredCalibrationDayWithinTolerance() {
-        let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 5.0, count: 113), epochSeconds: 60)
-        let measured = 11_167.0
-        let err = abs((e.estStepsWalkingEquivalent ?? 0) - measured) / measured
-        XCTAssertLessThan(err, 0.15, "walking-equivalent \(String(describing: e.estStepsWalkingEquivalent)) vs measured \(measured)")
-    }
-
-    /// The cadence constant must stay in the physiological walking band. It is justified BY that band
-    /// (~100-120 steps/min) rather than by an arbitrary fit, so a value outside it would mean the estimate
-    /// had quietly become a curve-fit to one wearer.
-    func testCadenceConstantStaysPhysiological() {
-        XCTAssertGreaterThanOrEqual(OuraActivityEstimator.stepsPerActiveMinute, 80)
-        XCTAssertLessThanOrEqual(OuraActivityEstimator.stepsPerActiveMinute, 130)
-    }
-
-    /// The 857-day validation showed the model does not merely lose precision past ~180 active minutes,
-    /// it becomes WRONG (median +226 %, p90 +812 %, only 24 % of days within ±50 %). Those days must
-    /// yield NO number rather than a confidently bad one.
-    func testImplausiblyActiveDayEmitsNoStepEstimate() {
-        let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 5.0, count: 300), epochSeconds: 60)
-        XCTAssertEqual(e.activeMinutes, 300, accuracy: 0.001)
-        XCTAssertNil(e.estStepsWalkingEquivalent,
-                     "past maxTrustedActiveMinutes the estimate must be suppressed, not printed")
-    }
-
-    /// Just inside the threshold still produces a figure — the guard must not silently swallow ordinary
-    /// very-active days.
-    func testJustInsideTheTrustThresholdStillEstimates() {
-        let n = Int(OuraActivityEstimator.maxTrustedActiveMinutes)
-        let e = OuraActivityEstimator.estimate(metSamples: Array(repeating: 5.0, count: n), epochSeconds: 60)
-        XCTAssertNotNil(e.estStepsWalkingEquivalent)
-        XCTAssertEqual(e.estStepsWalkingEquivalent ?? -1,
-                       Double(n) * OuraActivityEstimator.stepsPerActiveMinute, accuracy: 0.001)
-    }
-
-    /// The threshold is a measured boundary, not a round guess — pin it so a casual edit has to confront
-    /// the validation table in the doc comment.
-    func testTrustThresholdMatchesTheValidatedBoundary() {
-        XCTAssertEqual(OuraActivityEstimator.maxTrustedActiveMinutes, 180, accuracy: 0.001)
+        XCTAssertEqual(e.metMinutes, 500, accuracy: 0.001, "MET-minutes still accrue at rest — 1 MET x 500")
     }
 }
