@@ -962,29 +962,22 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         for day in activityMETByDay.keys.sorted() {
             let est = OuraActivityEstimator.estimate(metSamples: activityMETByDay[day] ?? [],
                                                      epochSeconds: activityEpochSeconds)
-            // The MET figures above describe THIS SESSION's drained samples. The step estimate must not:
-            // it is a DAILY total, so it reads the persisted cross-session tally (`OuraActivityDump`,
-            // deduped by ring-time) instead. Reading it off the session buffer made the figure "steps
-            // since this session's cursor" — on 2026-08-02 that was 395 of the day's 892 samples, which
-            // happened to land near the measured count and would have read very differently at another
-            // connect time. `dayActiveMin` is logged beside it so the two are never confused.
+            // The MET figures above describe THIS SESSION's drained samples; `dayActiveMin` is the DAILY
+            // total, read from the persisted cross-session tally (`OuraActivityDump`, deduped by
+            // ring-time). Both are logged so the two are never confused.
             //
-            // `walkStepsEst` is a WALKING-EQUIVALENT diagnostic (activeMin × 100), NOT a step count — the
-            // ring sends none NOOP can decode (§6.13). Validated against 857 days of the wearer's own Oura
-            // Cloud step counts: median error ≈ 0 (it is NOT the "over-reads 30-40 %" an earlier single-day
-            // check suggested), but only ~64 % of days land within ±25 %. Past
-            // `maxTrustedActiveMinutes` the model is wrong rather than imprecise, so it emits no number at
-            // all. Never leaves this log line: no `steps` row, no scoring.
+            // NO STEP FIGURE — removed 2026-08-07. This line used to carry `walkStepsEst≈` (dayActiveMin
+            // × 100). A controlled falsifier killed it: a 23-minute open-water swim with a ground truth of
+            // ZERO steps held MET 4.3-7.9, and 20 of its 24 minutes cleared MET ≥ 3.0 — 2,000 phantom
+            // steps, 28 % of that day's printed figure. The `maxTrustedActiveMinutes` guard did not fire
+            // (the day was only 72 active minutes), because a guard on the DAY total cannot catch a
+            // bounded non-gait SESSION. MET measures exertion, not gait. See OuraActivityEstimator's
+            // "Why there is no step estimate here" note. Active minutes / MET-minutes stay: they are
+            // honest aggregations and were never in question.
             let dayActiveMin = activityDump?.activeMinutes(forDay: day) ?? est.activeMinutes
-            let dayStepsEst: String
-            if dayActiveMin > OuraActivityEstimator.maxTrustedActiveMinutes {
-                dayStepsEst = "n/a (>\(Int(OuraActivityEstimator.maxTrustedActiveMinutes))min active - sustained non-walking activity, model not applicable)"
-            } else {
-                dayStepsEst = String(format: "≈%.0f", (dayActiveMin * OuraActivityEstimator.stepsPerActiveMinute).rounded())
-            }
-            log(String(format: "Oura: activity estimate day=%@ samples=%d meanMET=%.2f maxMET=%.1f metMin=%.1f activeMin=%.1f (session) | dayActiveMin=%.1f walkStepsEst%@ (day total) [assumed %.0fs/sample, Tier-B est; ~64%% of days within ±25%%, walking-equivalent, NOT a count]",
+            log(String(format: "Oura: activity estimate day=%@ samples=%d meanMET=%.2f maxMET=%.1f metMin=%.1f activeMin=%.1f (session) | dayActiveMin=%.1f (day total) [assumed %.0fs/sample, Tier-B MET diagnostic; exertion, NOT steps and NOT a gait signal]",
                        day, est.sampleCount, est.meanMET, est.maxMET, est.metMinutes, est.activeMinutes,
-                       dayActiveMin, dayStepsEst, activityEpochSeconds))
+                       dayActiveMin, activityEpochSeconds))
         }
     }
 
