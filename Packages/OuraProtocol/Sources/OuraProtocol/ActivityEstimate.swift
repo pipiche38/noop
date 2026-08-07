@@ -33,20 +33,13 @@ public struct OuraActivityEstimate: Equatable, Sendable {
     public let estActiveKcal: Double?
     /// Estimated GROSS energy: Σ metᵢ × massKg × epochHours (kcal), basal included. nil without body mass.
     public let estTotalKcal: Double?
-    /// A WALKING-EQUIVALENT step estimate: `activeMinutes × stepsPerActiveMinute`, or **nil when the day
-    /// exceeds `maxTrustedActiveMinutes`** — on those days the model is not merely imprecise but wrong
-    /// (median +226 %, p90 +812 % against 857 days of real step counts), so no number is emitted rather
-    /// than a confidently bad one. See `stepsPerActiveMinute` for the full validation.
-    ///
-    /// Even when non-nil this is a DIAGNOSTIC for eyeballing a day's trend: median error ≈ 0 but only
-    /// ~64 % of days land within ±25 %. It is NOT a step count, must never mint a `steps` row, and must
-    /// never be scored. NOOP's honest position stands: the ring exposes no step count NOOP can decode
-    /// (`0x7E`/`0x7F` are model FEATURES, ground-truth-refuted 2026-08-01 — OURA_PROTOCOL.md §6.13).
-    public let estStepsWalkingEquivalent: Double?
+    // NO STEP FIELD — REMOVED 2026-08-07, and it must not come back. See the note on
+    // `OuraActivityEstimator` for the falsifier that killed it. The ring exposes no step count NOOP can
+    // decode (`0x7E`/`0x7F` are model FEATURES, ground-truth-refuted 2026-08-01, OURA_PROTOCOL.md §6.13),
+    // and MET cannot substitute for one: it measures EXERTION, not gait.
 
     public init(sampleCount: Int, epochSeconds: Double, meanMET: Double, maxMET: Double,
-                metMinutes: Double, activeMinutes: Double, estActiveKcal: Double?, estTotalKcal: Double?,
-                estStepsWalkingEquivalent: Double? = nil) {
+                metMinutes: Double, activeMinutes: Double, estActiveKcal: Double?, estTotalKcal: Double?) {
         self.sampleCount = sampleCount
         self.epochSeconds = epochSeconds
         self.meanMET = meanMET
@@ -55,65 +48,43 @@ public struct OuraActivityEstimate: Equatable, Sendable {
         self.activeMinutes = activeMinutes
         self.estActiveKcal = estActiveKcal
         self.estTotalKcal = estTotalKcal
-        self.estStepsWalkingEquivalent = estStepsWalkingEquivalent
     }
 }
 
 /// Pure MET-stream aggregation. No database, no CoreBluetooth, no clock — the caller decides which
 /// samples belong to the window/day (using the UTC anchor) and passes them in.
 public enum OuraActivityEstimator {
-    /// Steps assumed per ACTIVE minute (MET ≥ threshold) for `estStepsWalkingEquivalent`.
-    ///
-    /// WHY 100, AND WHY THIS IS A COARSE ESTIMATE, NOT A DECODE: the ring sends no step count NOOP can
-    /// read — the `0x7E`/`0x7F` real_steps records were ground-truth-refuted on 2026-08-01 (no field is a
-    /// count; they are the step model's INPUT features, OURA_PROTOCOL.md §6.13). So a step figure can only
-    /// be INFERRED from an independent signal, and the MET stream is the one NOOP already decodes with a
-    /// self-proven 60 s cadence.
-    ///
-    /// ORIGIN: calibrating on one golf round (11,167 measured steps / 113 active minutes) gave 99 steps
-    /// per active minute, which lands on ordinary walking cadence (~100–120 steps·min⁻¹), so 100 was
-    /// chosen — justified by the physiological band rather than by the fit.
-    ///
-    /// VALIDATED AGAINST **857 DAYS** of the wearer's own Oura Cloud export (`dailyactivity.csv`: Oura's
-    /// own per-day step count beside its per-minute MET series, whose `interval` field independently
-    /// confirms the 60 s cadence NOOP self-proved). This REPLACES the earlier single-day characterisation,
-    /// which was wrong in both direction and magnitude:
-    /// - **Median error ≈ 0** — −1.3 % over a held-out 256-day period, −13.8 % over all 857. The estimate
-    ///   is essentially UNBIASED at the median. The earlier "over-reads 30–40 %" claim came from one
-    ///   golf day and does not generalise.
-    /// - **But the spread is wide and the right tail is severe:** p10 −30 %, p90 +186 %; ~64 % of days
-    ///   within ±25 %, ~83 % within ±50 %. R² of active-minutes against real steps is only ~0.15–0.25, so
-    ///   most day-to-day step variance is NOT explained by MET.
-    /// - Refitting `k` does not rescue it (least-squares gives 68, median-ratio 121; both score worse
-    ///   overall than 100), so 100 stands — the weakness is the MET→steps relationship itself, not the
-    ///   constant.
-    ///
-    /// THE FAILURE MODE IS IDENTIFIABLE, which is why `maxTrustedActiveMinutes` exists: error is strongly
-    /// conditional on how much of the day was "active".
-    ///
-    /// | active minutes | days | median err | p90 err | within ±50 % |
-    /// |---|---|---|---|---|
-    /// | 0–60    | 304 | −31 % | −10 % | 87 % |
-    /// | 60–120  | 368 | −12 % | +9 %  | 99 % |
-    /// | 120–180 | 103 | +1 %  | +41 % | 93 % |
-    /// | **>180**| 76  | **+226 %** | **+812 %** | **24 %** |
-    ///
-    /// Below 180 the estimate is a usable rough indicator; above it the estimate is worthless (worst
-    /// observed day: 364 active minutes → 36,400 estimated against 2,612 real steps, +1,294 %). Those are
-    /// sustained-high-MET, low-step days — cycling, rowing, manual work — i.e. exactly the documented
-    /// "active but not walking" bias, and they are 9 % of days.
-    ///
-    /// OTHER BIASES, unquantified: the MET stream has ring-side cadence gaps (~86 % minute coverage on a
-    /// choppy day, §6.13) so active minutes UNDERCOUNT; MET underreads water activity (swims read
-    /// near-rest). Treat this as "roughly how much walking was in the day", never as a pedometer.
-    public static let stepsPerActiveMinute: Double = 100
+    // MARK: - Why there is no step estimate here (read before adding one)
+    //
+    // A `stepsPerActiveMinute` constant and a `maxTrustedActiveMinutes` guard used to live here, turning
+    // active minutes into a "walking-equivalent" step figure. **Both were REMOVED on 2026-08-07 because a
+    // controlled falsifier refuted the model outright.** The history is kept because the idea is tempting
+    // and will be re-proposed:
+    //
+    // - The model was: count minutes with MET >= 3.0, multiply by k (k = 100). On one flat walk it landed
+    //   within +3 % of a pedometer, which is exactly the #194 trap CLAUDE.md warns about.
+    // - Validated against **857 days** of the wearer's own Oura Cloud export it was unbiased at the median
+    //   (-1.3 % held-out) but explained almost nothing: R^2 of active-minutes against real steps was only
+    //   ~0.15-0.25, p10 -30 % / p90 +186 %. Refitting k did not help (least-squares 68, median-ratio 121,
+    //   both worse than 100) - the weakness was the MET->steps relationship itself, not the constant.
+    // - **2026-08-07, the falsifier: a 23-minute open-water swim, timed by an independent watch, with a
+    //   ground truth of ZERO steps.** MET held 4.3-7.9 throughout (so the ring did see the activity - this
+    //   was not a silent no-op), and **20 of the 24 minutes cleared MET >= 3.0, producing 2,000 phantom
+    //   steps.** No threshold rescues it: even at MET >= 5.0 the swim still mints 1,400. The model was
+    //   measuring EXERTION, not gait.
+    // - The `maxTrustedActiveMinutes = 180` guard did NOT save it. That day totalled only 72 active
+    //   minutes, so the guard never fired and the figure was printed with 28 % of it phantom. A guard on
+    //   the DAY total cannot catch a bounded non-gait SESSION inside an ordinary day.
+    //
+    // Everything below this line is honest: active minutes, MET-minutes, mean/max MET and the energy
+    // fields are direct aggregations of the decoded MET stream and were never in question. What was wrong
+    // was converting them into a unit the ring never sends. Full write-up:
+    // `OURA_STEPS_GROUNDTRUTH_20260803.md` (ADDENDUM 2026-08-07).
+    //
+    // The MET decode formula itself is still third-party and Tier B (see `OuraActivityInfo`); these
+    // aggregates are for eyeballing against WHOOP active-kcal / Apple Health active energy, not for
+    // scoring.
 
-    /// Above this many active minutes the walking-equivalent estimate is NOT trustworthy and callers must
-    /// suppress it rather than print a number. Derived from the 857-day validation above: at >180 active
-    /// minutes the median error jumps to +226 % and the p90 to +812 %, with only 24 % of days inside
-    /// ±50 % — versus 87–99 % inside ±50 % below the threshold. Such a day is sustained non-walking
-    /// activity, where "active minutes × walking cadence" is the wrong model outright.
-    public static let maxTrustedActiveMinutes: Double = 180
     /// Aggregate raw MET samples into an estimate. `epochSeconds` is the assumed per-sample duration
     /// (the calibration knob); `bodyMassKg` enables the energy fields; a sample counts as "active" when
     /// its MET reaches `moderateThresholdMET`. An empty input yields an all-zero estimate (never nil —
@@ -157,10 +128,7 @@ public enum OuraActivityEstimator {
             metMinutes: r2(metMinutes),
             activeMinutes: r2(activeMinutes),
             estActiveKcal: activeKcal.map(r2),
-            estTotalKcal: totalKcal.map(r2),
-            // nil past the trust threshold: on those days the model is wrong, not just imprecise.
-            estStepsWalkingEquivalent: activeMinutes > maxTrustedActiveMinutes
-                ? nil : (activeMinutes * stepsPerActiveMinute).rounded()
+            estTotalKcal: totalKcal.map(r2)
         )
     }
 
