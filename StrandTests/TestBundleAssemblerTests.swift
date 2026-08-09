@@ -119,8 +119,8 @@ final class TestBundleAssemblerTests: XCTestCase {
     }
 
     func testCapSharesBudgetAcrossOuraAndRawCaptureKeepingTails() {
-        // report.txt kept whole; raw-capture + oura-ibihr together blow the cap → BOTH trimmed to a
-        // proportional tail, bundle stays under cap, and each keeps its most-recent byte.
+        // report.txt kept whole; raw-capture + oura-ibihr together blow the cap → BOTH over their fair
+        // share, so both are trimmed, the bundle stays under cap, and each keeps its most-recent byte.
         let small = FileExport.BundleEntry(name: "report.txt", data: Data("small".utf8))
         let raw = FileExport.BundleEntry(name: "raw-capture.jsonl",
                                          data: Data((String(repeating: "r", count: 30 * 1024 * 1024) + "R").utf8))
@@ -137,8 +137,55 @@ final class TestBundleAssemblerTests: XCTestCase {
         XCTAssertLessThan(cappedIbi.data.count, ibi.data.count)                             // trimmed
         XCTAssertEqual(cappedRaw.data.last, raw.data.last)                                  // newest kept
         XCTAssertEqual(cappedIbi.data.last, ibi.data.last)
-        // Bigger stream gets the bigger share (raw was 3× ibi).
-        XCTAssertGreaterThan(cappedRaw.data.count, cappedIbi.data.count)
+        // Both were over the fair share, so they land on it — within a byte of each other, NOT split 3:1
+        // by size the way the old proportional rule would have.
+        XCTAssertLessThanOrEqual(abs(cappedRaw.data.count - cappedIbi.data.count), 1)
+    }
+
+    /// The bug this allocation exists to prevent (measured on `noop-master-iOS-v9.3.1-260809-0716.zip`):
+    /// proportional-to-size handed 53.9 % of the budget to the bulk SpO2 dump and left the raw wire capture
+    /// — the only sidecar a protocol fact can be re-derived from — with 1.9 %, i.e. 8 min of an 8.4 h night.
+    /// Max-min fair keeps a modest stream WHOLE and takes the bytes off the stream that is merely bulky.
+    func testSmallHighValueSidecarSurvivesABulkyNeighbour() {
+        let report = FileExport.BundleEntry(name: "report.txt", data: Data("small".utf8))
+        // Mirrors the real shape: one 40 MB bulk dump beside a 2 MB wire capture, 20 MB of room.
+        let spo2 = FileExport.BundleEntry(name: "oura-spo2.jsonl",
+                                          data: Data(String(repeating: "s\n", count: 20 * 1024 * 1024).utf8))
+        let raw = FileExport.BundleEntry(name: "oura-raw.jsonl",
+                                         data: Data(String(repeating: "r\n", count: 1024 * 1024).utf8))
+        let cap = 20 * 1024 * 1024
+        let (capped, truncated) = TestBundleAssembler.capEntries([report, spo2, raw], capBytes: cap)
+        XCTAssertTrue(truncated)
+        XCTAssertLessThanOrEqual(capped.reduce(0) { $0 + $1.data.count }, cap)
+        // The wire capture is under its ~10 MB fair share, so it ships WHOLE — not scaled down to ~9 % of
+        // the budget the way size-proportional splitting would have left it.
+        XCTAssertEqual(capped.first { $0.name == "oura-raw.jsonl" }?.data.count, raw.data.count)
+        // Its surplus rolls forward: the bulk dump gets everything the raw capture did not need.
+        let cappedSpo2 = capped.first { $0.name == "oura-spo2.jsonl" }!
+        XCTAssertLessThan(cappedSpo2.data.count, spo2.data.count)
+        XCTAssertGreaterThan(cappedSpo2.data.count, cap - raw.data.count - 1024)
+    }
+
+    func testFairAllowancesIsWaterFillingAndNeverBreachesBudget() {
+        // Classic water-filling: 1 fits whole, 10 takes its share of what is left, 30 takes the rest.
+        let a = TestBundleAssembler.fairAllowances(
+            sizes: [("big", 30), ("small", 1), ("mid", 10)], budget: 20)
+        XCTAssertEqual(a["small"], 1)                                    // whole, under any share
+        XCTAssertEqual(a["mid"], 9)                                      // (20-1)/2
+        XCTAssertEqual(a["big"], 10)                                     // the remainder
+        XCTAssertEqual(a.values.reduce(0, +), 20)                        // budget fully used
+        // Input order must not change the answer.
+        let b = TestBundleAssembler.fairAllowances(
+            sizes: [("small", 1), ("mid", 10), ("big", 30)], budget: 20)
+        XCTAssertEqual(a, b)
+        // Everything fits: nobody is trimmed.
+        XCTAssertEqual(TestBundleAssembler.fairAllowances(sizes: [("x", 3), ("y", 4)], budget: 100),
+                       ["x": 3, "y": 4])
+        // Degenerate budgets stay in range rather than going negative.
+        XCTAssertEqual(TestBundleAssembler.fairAllowances(sizes: [("x", 5)], budget: 0), ["x": 0])
+        XCTAssertEqual(TestBundleAssembler.fairAllowances(sizes: [], budget: 10), [:])
+        // A single trimmable stream still gets the WHOLE remainder — the original behaviour, unchanged.
+        XCTAssertEqual(TestBundleAssembler.fairAllowances(sizes: [("only", 999)], budget: 42), ["only": 42])
     }
 
     /// The redaction contract for the Oura sidecars (PR review, ryanbr): the ONLY PII in a raw line is the
