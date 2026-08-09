@@ -274,9 +274,18 @@ final class OuraStreamMappingTests: XCTestCase {
             // 0x7E/0x7F real_steps_features: decoded but Tier-B/unvalidated - must never mint a `steps`
             // row either, even from its leading candidate field (see OuraRealStepsFields).
             .realStepsFields(OuraRealStepsFields(tag: 0x7E, ringTimestamp: 100, fields: Array(0..<14))),
+            // 0x6A sleep_period_info: decoded but Tier-B/unvalidated. Two ways it could leak and both
+            // are barred - its `averageHrBpm` must not join the beat-derived HR series (different
+            // cadence, different provenance), and its `breathsPerMin` must not become a respiratory
+            // rate anywhere until it tracks a moving ground truth (see OuraSleepPeriodInfo).
+            .sleepPeriodInfo(OuraSleepPeriodInfo(ringTimestamp: 100, averageHrBpm: 53.0, hrTrend: -0.625,
+                                                 mzci: 3.75, dzci: 1.75, breathsPerMin: 14.375,
+                                                 breathVariability: 4.625, motionCount: 0, sleepState: 1,
+                                                 cv: 0.25)),
         ], at: ts)
         XCTAssertTrue(s.isEmpty, "Tier-B and diagnostic events must not produce any durable stream row")
         XCTAssertTrue(s.steps.isEmpty, "activity/MET/real_steps must never fabricate a steps row")
+        XCTAssertTrue(s.hr.isEmpty, "0x6A average_hr must never land in the beat-derived HR series")
     }
 
     // MARK: - Batching a record's events into one insert (#1072, root cause for #823)

@@ -470,6 +470,15 @@ public final class OuraDriver {
             // the movement-correlated fields present in both).
             guard let fields = OuraDecoders.decodeRealStepsFields(record) else { return [] }
             return [.realStepsFields(fields)]
+        case .sleepPeriodInfo:
+            // Split out of the raw-bytes .tierB wrapper, same as .activityInfo: this tag has a cited
+            // third-party layout ([open_ring]) whose field NAMES are what our own §6.12 was missing, and
+            // whose declared invariants our captures uphold. Still Tier B - only reached behind
+            // allowTierB (gated above), and OuraStreamMapping never folds .sleepPeriodInfo into a durable
+            // stream. Emphatically NOT a respiratory-rate source yet: `breathsPerMin` is a named
+            // candidate awaiting a moving ground truth (#194), not a value to surface or score.
+            guard let info = OuraDecoders.decodeSleepPeriodInfo(record) else { return [] }
+            return [.sleepPeriodInfo(info)]
         case .spo2Smoothed:
             return [.tierB(OuraTierBSummary(tag: record.type, ringTimestamp: record.ringTimestamp,
                                             rawPayload: record.payload, kind: "spo2_smoothed"))]

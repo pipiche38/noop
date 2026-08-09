@@ -1809,6 +1809,22 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                     realStepsDump?.record(tag: steps.tag, ringTs: steps.ringTimestamp, utc: utc, fields: steps.fields)
                 }
 
+            case .sleepPeriodInfo(let info):
+                // INVESTIGATION ONLY (0x6A sleep_period_info, Tier B - third-party field NAMES
+                // [open_ring] over offsets our own §6.12 already had; see OuraSleepPeriodInfo). Logged
+                // with the DECODED values every time, like 0x50 MET rather than once-per-kind: this is
+                // the tag under active evaluation, its cadence is a modest ~5 min, and the question it
+                // has to answer - does `breath` MOVE with a real respiratory rate (#194) - can only be
+                // answered from the series, not from one sample. Never persisted, never scored
+                // (OuraStreamMapping drops .sleepPeriodInfo unconditionally), and specifically NOT
+                // surfaced as a respiratory rate: naming a field is not validating it.
+                let periodWhen = driver.unixSeconds(forRingTimestamp: info.ringTimestamp)
+                    .map { Self.cursorDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval($0))) }
+                    ?? "no anchor yet"
+                log("Oura: sleep_period (Tier-B) [\(periodWhen)] hr=\(info.averageHrBpm) "
+                    + "trend=\(info.hrTrend) breath=\(info.breathsPerMin) "
+                    + "breathV=\(info.breathVariability) motion=\(info.motionCount) state=\(info.sleepState)")
+
             case .state(let s):
                 // The ring's own lifecycle strings (0x45/0x53). Charger transitions drive the wear badge;
                 // never a durable Streams row. Only the LIVE stream updates the indicator (a history

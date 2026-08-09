@@ -553,6 +553,16 @@ class OuraDriver(
                 val fields = OuraDecoders.decodeRealStepsFields(record) ?: return emptyList()
                 listOf(OuraEvent.RealStepsFields(fields))
             }
+            OuraEventTag.SLEEP_PERIOD_INFO -> {
+                // Split out of the raw-bytes TierB wrapper, same as ActivityInfo: this tag has a cited
+                // third-party layout ([open_ring]) whose field NAMES are what our own s6.12 was missing,
+                // and whose declared invariants our captures uphold. Still Tier B - only reached behind
+                // allowTierB (gated above), and OuraStreamMapping never folds SleepPeriodInfo into a
+                // durable stream. Emphatically NOT a respiratory-rate source yet: `breathsPerMin` is a
+                // named candidate awaiting a moving ground truth (#194), not a value to surface or score.
+                val info = OuraDecoders.decodeSleepPeriodInfo(record) ?: return emptyList()
+                listOf(OuraEvent.SleepPeriodInfo(info))
+            }
             OuraEventTag.SPO2_SMOOTHED ->
                 listOf(
                     OuraEvent.TierB(

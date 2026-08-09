@@ -221,6 +221,10 @@ object OuraStreamMapping {
                 // break the honest-data invariant and the per-source day-owner rules. Same discipline
                 // applies to 0x81 CVA raw PPG (OURA_PROTOCOL.md s6.14) and 0x7E/0x7F real_steps (s6.13) -
                 // decoded, logged, never scored, not even real_steps' leading candidate field.
+                // Same discipline again for 0x6A sleep_period_info (s6.12), where there are two ways
+                // to leak and both are barred: its `averageHrBpm` must not join the beat-derived HR
+                // series (different cadence, different provenance), and its `breathsPerMin` is a NAMED
+                // CANDIDATE with no respiratory ground truth behind it.
                 else -> Unit
             }
         }

@@ -203,12 +203,16 @@ public enum OuraStreamMapping {
                 out.events.append(WhoopEvent(ts: ts, kind: motionEventKind, payload: payload))
 
             case .motion, .state, .timeSync, .rtcBeacon, .debugText, .tierB, .activityInfo, .cvaRawPpg,
-                 .realStepsFields:
+                 .realStepsFields, .sleepPeriodInfo:
                 // Not a durable per-device stream row (timeSync/rtcBeacon anchor the transport's clock;
                 // motion/state/debug are diagnostics; Tier-B / .activityInfo / .cvaRawPpg /
-                // .realStepsFields are UNVERIFIED and must never feed scoring or the steps stream - in
-                // particular .realStepsFields must never mint a `steps` row on its own, even for its
-                // leading candidate field; see OuraRealStepsFields).
+                // .realStepsFields / .sleepPeriodInfo are UNVERIFIED and must never feed scoring or the
+                // steps stream - in particular .realStepsFields must never mint a `steps` row on its own,
+                // even for its leading candidate field; see OuraRealStepsFields. .sleepPeriodInfo is
+                // dropped here for the same reason and one more: its `averageHrBpm` would otherwise land
+                // in the same HR series as the beat-derived channel at a DIFFERENT cadence and a
+                // different provenance, and its `breathsPerMin` is a named candidate with no respiratory
+                // ground truth behind it (see OuraSleepPeriodInfo).
                 continue
             }
         }

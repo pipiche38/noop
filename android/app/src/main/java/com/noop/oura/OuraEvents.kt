@@ -310,6 +310,57 @@ data class OuraCvaPpg(val ringTimestamp: Long, val values: List<Int>)
  */
 data class OuraRealStepsFields(val tag: Int, val ringTimestamp: Long, val fields: List<Int>)
 
+/**
+ * One decoded `0x6A` sleep_period_info record: the ring's OWN per-window sleep summary - an average
+ * heart rate and, notably, a **breath rate**. THIRD-PARTY FIELD NAMES ([open_ring]
+ * `decode_sleep_period_info_2` / native `parse_api_sleep_period_info`, clean-room fact citation, no code
+ * copied; the multipliers are its `.rodata` constants). Our own s6.12 already carried the right OFFSETS
+ * and the right `/8.0` from [ringverse] but no names, and mistyped `average_hr` as an `int8` with no
+ * `* 0.5`.
+ *
+ * STRUCTURALLY VERIFIED on four consecutive real Gen 3 overnights (2026-08-05->09, 3,493 records): every
+ * body is exactly 10 bytes; every record satisfies the source's own declared invariants
+ * (`motionCount < 121`, `sleepState in {0,1,2}` - only 0 and 1 ever observed); every `breath` is an exact
+ * multiple of 0.125, which confirms the `/8.0` fixed point FROM THE DATA rather than assuming it; and
+ * `averageHrBpm` medians 53.0-54.0 bpm across the four nights, agreeing with the 54 bpm median the
+ * independently-decoded banked-IBI channel gives for the same wearer (#511, itself WHOOP-validated
+ * against RHR 55). The `* 0.5` scale is settled by its falsifier: read as `* 1.0` the same records sit
+ * +56 ... +62 bpm above every other HR channel we hold.
+ *
+ * NOT VALIDATED, and this is the whole reason it stays Tier B: nothing here shows `breath` IS a
+ * respiratory rate. It is plausible (median 14.4/min, IQR 13.1-15.4, co-varying weakly with HR at
+ * r ~ +0.35 and independent of motion at r ~ -0.02) and self-consistent across four nights, but there is
+ * no respiratory ground truth in hand, and per the #194 bar plausibility on N nights is not tracking -
+ * that needs >= 2 nights where a reference respiratory rate MOVES and this one moves with it. Until
+ * then: emitted only behind `OuraDriver.allowTierB`, logged for investigation, and NEVER folded into
+ * `OuraStreamMapping`/scoring.
+ *
+ * `mzci` / `dzci` keep the source's opaque names deliberately - we do not know what they measure, and
+ * inventing a friendlier name would assert an interpretation the evidence does not support. Kotlin twin
+ * of the Swift `OuraSleepPeriodInfo`.
+ */
+data class OuraSleepPeriodInfo(
+    val ringTimestamp: Long,
+    /** Wire `u8 * 0.5`, so the channel has half-bpm resolution (~50 % of real records carry an odd byte). */
+    val averageHrBpm: Double,
+    /** Wire `s8 * 0.0625` - signed; the only signed field in the body. */
+    val hrTrend: Double,
+    /** Wire `u8 * 0.0625`. Meaning unknown (source's name kept verbatim). */
+    val mzci: Double,
+    /** Wire `u8 * 0.0625`. Meaning unknown (source's name kept verbatim). */
+    val dzci: Double,
+    /** Wire `u8 / 8.0` - CANDIDATE breaths per minute. See the type doc: named, not validated. */
+    val breathsPerMin: Double,
+    /** Wire `u8 / 8.0` - CANDIDATE breath variability, same units as [breathsPerMin]. */
+    val breathVariability: Double,
+    /** Wire `u8`, declared `< 121` by the source (upheld by every record we hold). */
+    val motionCount: Int,
+    /** Wire `u8`, declared `in {0,1,2}` (only 0 and 1 observed). Code meanings undocumented - no enum. */
+    val sleepState: Int,
+    /** Wire `u16 LE / 65536`, so `[0, 1)`. Meaning unknown (source's name kept verbatim). */
+    val cv: Double,
+)
+
 // MARK: - The emitted event union
 
 /**
@@ -370,8 +421,18 @@ sealed class OuraEvent {
      */
     data class RealStepsFields(val value: OuraRealStepsFields) : OuraEvent()
 
+    /**
+     * A decoded `0x6A` sleep_period_info record (avg HR + a candidate breath rate). Still Tier-B (see
+     * [OuraSleepPeriodInfo] doc) - split out of the raw-bytes [TierB] wrapper for the same reason
+     * [ActivityInfo] was: a cited third-party layout worth surfacing as real numbers instead of hex.
+     * Same gate (`allowTierB`), same discipline (never reaches `OuraStreamMapping`).
+     */
+    data class SleepPeriodInfo(val value: OuraSleepPeriodInfo) : OuraEvent()
+
     /** True for Tier-B events, so a consumer can assert none leaked into a Tier-A-only sink. */
-    val isTierB: Boolean get() = this is TierB || this is ActivityInfo || this is CvaRawPpg || this is RealStepsFields
+    val isTierB: Boolean
+        get() = this is TierB || this is ActivityInfo || this is CvaRawPpg || this is RealStepsFields ||
+            this is SleepPeriodInfo
 
     /**
      * The record's envelope ring-time, when it carries one (battery is a plain response, not a log
@@ -398,5 +459,6 @@ sealed class OuraEvent {
             is ActivityInfo -> value.ringTimestamp
             is CvaRawPpg -> value.ringTimestamp
             is RealStepsFields -> value.ringTimestamp
+            is SleepPeriodInfo -> value.ringTimestamp
         }
 }

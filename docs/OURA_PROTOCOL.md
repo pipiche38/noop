@@ -612,7 +612,60 @@ like its sibling banked streams (`.hrv`/`.temp`/`.spo2`/`.sleepPhase`) — the f
 
 ### 6.12 Sleep architecture
 - **`0x4B` / `0x4E` / `0x5A` `sleep_phase_details`** (≥19 B): byte6 = header; phase codes are **2-bit**, 4 per byte (bits `[7:6][5:4][3:2][1:0]`); codes **0=deep, 1=light, 2=rem, 3=awake** per open_oura's VALIDATED `decode_sleep_phases` (events.rs `PHASE = ["deep","light","rem","awake"]`). **CORRECTION:** an earlier revision of this line taught `0=awake, 1=light, 2=deep, 3=REM` from [ringverse] (unverified); live captures contradicted it (records decoded at wake carry code 3 = awake under open_oura's mapping), and both platform decoders inherited the bug from this exact text. [open_oura]
-- **`0x6A` `sleep_period_info`** (14 B): bytes6–9 four int8 metrics; bytes10–11 `uint8/8.0`; byte12 motion-seconds uint8; byte13 sleep-state int8; bytes14–15 `uint16 LE / 65536`. [ringverse]
+- **`0x6A` `sleep_period_info`** (14 B declared length ⇒ a fixed **10-byte body**) — **the ring's own
+  average HR and a breath rate.** Body offsets, names and multipliers per [open_ring]
+  (`decode_sleep_period_info_2` / `parse_api_sleep_period_info`; the four `× …` constants are its
+  `.rodata` block):
+
+  | body byte | field | type | scale | note |
+  |---|---|---|---|---|
+  | 0 | `average_hr` | u8 | **× 0.5** | wire 130 = 65 bpm — **not** a bare bpm byte |
+  | 1 | `hr_trend` | **s8** | × 0.0625 | the only SIGNED field in the body |
+  | 2 | `mzci` | u8 | × 0.0625 | meaning undocumented |
+  | 3 | `dzci` | u8 | × 0.0625 | meaning undocumented |
+  | 4 | **`breath`** | u8 | **/ 8.0** | **breaths per minute** |
+  | 5 | `breath_v` | u8 | / 8.0 | breath variability |
+  | 6 | `motion_count` | u8 | — | source's parser THROWS if ≥ 121 |
+  | 7 | `sleep_state` | u8 | — | source's parser THROWS if ∉ {0,1,2} |
+  | 8–9 | `cv` | u16 LE | / 65536 | ⇒ [0,1) |
+
+  **CORRECTION to this line's previous revision**, which read *"bytes6–9 four int8 metrics; bytes10–11
+  `uint8/8.0`; byte12 motion-seconds; byte13 sleep-state int8; bytes14–15 uint16 LE/65536"* [ringverse]:
+  the OFFSETS were right and the `/8.0` was right, but there were **no names** — so the tag looked like
+  four anonymous metrics rather than a heart rate and a respiration channel — and `average_hr` was typed
+  `int8` with **no `× 0.5`**, which reads every value above 63.5 bpm as a negative number. [ringverse]
+  calls bytes 4/5 `field_a` / `field_b`; neither source NOOP already carried named them.
+
+  **NOOP verification, four consecutive real Gen 3 overnights (2026-08-05 → 08-09, 3 493 records):**
+  every body is exactly 10 bytes; **every** record satisfies both declared invariants (`motion_count <
+  121`; `sleep_state ∈ {0,1,2}`, and only 0 and 1 ever occur); **every** `breath` value is an exact
+  multiple of 0.125 across 78–84 distinct values per night, which confirms the `/8.0` fixed point *from
+  the data* rather than assuming it. Per-night medians: `average_hr` **54.0 / 53.0 / 53.5 / 54.0 bpm**,
+  `breath` **14.75 / 14.375 / 14.625 / 15.0 /min** (IQR ≈ 13.1–15.9), `breath_v` ≈ 4.2–5.0.
+  The `× 0.5` scale is settled by its **falsifier**: read as `× 1.0` the same records sit **+56 … +62
+  bpm** above every other HR channel we hold for the same wearer, and the independently-decoded banked
+  IBI (§6.1, WHOOP-validated at RHR 55 in #511) medians 54 bpm — which `× 0.5` reproduces. ~50 % of
+  records carry an ODD wire byte (0.506 / 0.530 / 0.507 / 0.467), so the half-bpm steps are real
+  resolution, not an artifact. Cadence ≈ **296 s**, and the tag is emitted only during sleep periods
+  (the 4 nights' records span far less wall-clock than their ring-time range).
+
+  ⚠️ **`breath` is NAMED, not VALIDATED — Tier B, and the #194 bar is not cleared.** No respiratory
+  ground truth has been held against it: the numbers are plausible (textbook sleeping RR, co-varying
+  weakly with HR at r ≈ +0.35 and independent of motion at r ≈ −0.02) and self-consistent over four
+  nights, but plausibility on N nights is not *tracking*. Promotion needs ≥ 2 nights where a reference
+  respiratory rate MOVES and this channel moves with it. NOOP therefore decodes 0x6A
+  (`OuraDecoders.decodeSleepPeriodInfo` → `OuraEvent.sleepPeriodInfo`, both platforms), gates it behind
+  `allowTierB`, logs it for investigation, and **never** folds it into `OuraStreamMapping`/scoring —
+  neither `average_hr` into the beat-derived HR series (different cadence, different provenance) nor
+  `breath` into any surfaced respiratory rate. Both decoders also **return nil/null when either declared
+  invariant is violated**: the source's own parser throws there, so such a body is not this layout, and
+  "not decoded" is the honest answer. It costs nothing — all 3 493 real records pass.
+
+  📌 **This does not retract the respiratory-rate gate.** That work proved RSA is unrecoverable *from
+  banked IBI* (shuffling the beats returns the same value; re-timing defeats the gate) and refusing to
+  publish a fabricated number is right regardless. What it corrects is that finding's *second* clause —
+  "the app must use a channel we never receive". We do receive one; we had simply never decoded the tag.
+  0x6A changes what may eventually sit behind the gate, not whether the gate belongs there.
 - **`0x72` `sleep_acm_period`** (16 B): values0–2 = `whole(8)+frac(8)/255`; values3–5 = `whole(4)+frac(12)/4095`. [ringverse]
 - **`0x49` `sleep_summary_1`**: `start_offset_min` / `end_offset_min`, both uint16 LE **minutes
   before the event time** — the ring's tracked sleep window is
@@ -1032,7 +1085,7 @@ Tags that appear in the banked stream but NOOP does not decode. Payloads are the
 | `0x61` | 28760 | 3–14 | `1a18009c3700007c150000cb` | **SOLVED as a channel, see §9.1** — a subtype-multiplexed firmware DIAGNOSTIC stream, not one message and not a physiological signal. **NOT battery** — the `[open_oura-act]`-adjacent "`0x61` battery" label does not match here (non-percent, high-frequency) |
 | `0x4a` | 8416 | 10 | `00000000000000000000` | payload observed all-zero — likely a keepalive / placeholder |
 | `0x72` | 5723 | 12 | `120027000100150018000200` | six int16-LE small values — a vector (motion / accel?) |
-| `0x6a` | 5689 | 10 | `7e00230b90140001f8b0` | mixed; a `0001f8b0` / `0001feb8` trailer recurs |
+| `0x6a` | 5689 | 10 | `7e00230b90140001f8b0` | **SOLVED, see §6.12** — `sleep_period_info`: the example decodes to `average_hr` 63.0 bpm, `breath` 18.0/min, `motion_count` 0, `sleep_state` 1, `cv` 0.691. The "recurring `0001f8b0` / `0001feb8` trailer" noted here was never a trailer: it is `motion_count`=0, `sleep_state`=1 and the 2-byte `cv`, and it recurs because a still sleeper produces those three over and over |
 | `0x6d` | 3042 | 13 | `00c4ffffb5ffffd2ffffeaffff` | **`measurement_quality`** (24-bit signed) per [ring4-ble] — supersedes the earlier gravity/accel guess; our capture reads `00` + int16-LE-looking negatives |
 | `0x6c` | 1750 | 4 | `02020400` | `02 NN 04 00` — small state / counter |
 | `0x5b` | 416 | 10–13 | `030093dd10dbc7c00000` | variable, leading sub-type byte |

@@ -1825,6 +1825,28 @@ class OuraLiveSource(
                     realStepsDump?.record(tag = e.value.tag, ringTs = e.value.ringTimestamp, utc = utc, fields = e.value.fields)
                 }
             }
+            is OuraEvent.SleepPeriodInfo -> {
+                // INVESTIGATION ONLY (0x6A sleep_period_info, Tier B - third-party field NAMES
+                // [open_ring] over offsets our own s6.12 already had; see OuraSleepPeriodInfo). Logged
+                // with the DECODED values every time, like 0x50 MET rather than once-per-kind: this is
+                // the tag under active evaluation, its cadence is a modest ~5 min, and the question it
+                // has to answer - does `breath` MOVE with a real respiratory rate (#194) - can only be
+                // answered from the series, not from one sample. Never persisted, never scored
+                // (OuraStreamMapping drops SleepPeriodInfo unconditionally), and specifically NOT
+                // surfaced as a respiratory rate: naming a field is not validating it.
+                //
+                // Twin of Swift's `.sleepPeriodInfo` log line, with one deliberate difference: Swift
+                // prints a formatted clock time because that source already holds a formatter, and this
+                // one holds none - the anchored epoch seconds correlate just as well, and adding a
+                // formatter here only to match a log string would be the wrong kind of parity.
+                val v = e.value
+                val whenUtc = d.unixSeconds(forRingTimestamp = v.ringTimestamp)?.toString() ?: "no anchor yet"
+                log(
+                    "Oura: sleep_period (Tier-B) [$whenUtc] hr=${v.averageHrBpm} trend=${v.hrTrend} " +
+                        "breath=${v.breathsPerMin} breathV=${v.breathVariability} " +
+                        "motion=${v.motionCount} state=${v.sleepState}",
+                )
+            }
             is OuraEvent.MotionVectorEvent -> {
                 // 0x47 averaged accel vector (Tier-A). Persisted as an OURA_MOTION event (same event-table
                 // path as OURA_HRV / OURA_SLEEP_PHASE — see OuraStreamMapping), AND appended to the raw

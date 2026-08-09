@@ -388,6 +388,17 @@ class OuraStreamMappingTest {
                 OuraEvent.RealStepsFields(
                     com.noop.oura.OuraRealStepsFields(tag = 0x7E, ringTimestamp = 100, fields = (0..13).toList()),
                 ),
+                // 0x6A sleep_period_info: decoded but Tier-B/unvalidated. Two ways it could leak and
+                // both are barred - its `averageHrBpm` must not join the beat-derived HR series
+                // (different cadence, different provenance), and its `breathsPerMin` must not become a
+                // respiratory rate anywhere until it tracks a moving ground truth (OuraSleepPeriodInfo).
+                OuraEvent.SleepPeriodInfo(
+                    com.noop.oura.OuraSleepPeriodInfo(
+                        ringTimestamp = 100, averageHrBpm = 53.0, hrTrend = -0.625, mzci = 3.75,
+                        dzci = 1.75, breathsPerMin = 14.375, breathVariability = 4.625,
+                        motionCount = 0, sleepState = 1, cv = 0.25,
+                    ),
+                ),
             ),
             anchor,
         )
