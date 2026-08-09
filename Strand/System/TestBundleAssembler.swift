@@ -63,11 +63,16 @@ enum TestBundleAssembler {
 
     /// Hard cap the bundle at `capBytes` (20 MB default, under GitHub's 25 MB; spec section 5.4). The
     /// strap-log tail and meta.json are already bounded, so only the `trimmableNames` research streams can
-    /// exceed. We reserve the whole size of every non-trimmable file, then split the remaining budget across
-    /// the trimmable files IN PROPORTION to their size, keeping the MOST-RECENT tail of each (newest data is
-    /// the most diagnostic) and trimming from the front. With a single trimmable file this is identical to
-    /// the prior raw-capture-only behaviour (its share is the whole remainder). Returns the capped entries
-    /// plus whether any truncation happened, which the caller writes to meta.truncated.
+    /// exceed. We reserve the whole size of every non-trimmable file, then share the remaining budget across
+    /// the trimmable files, keeping the MOST-RECENT tail of each (newest data is the most diagnostic) and
+    /// trimming from the front. Returns the capped entries plus whether any truncation happened, which the
+    /// caller writes to meta.truncated.
+    ///
+    /// ALLOCATION: **max-min fair** (water-filling), NOT proportional-to-size. Each stream is offered an
+    /// equal share of what is left; a stream smaller than its share is kept WHOLE and its unused remainder
+    /// flows to the streams that are still over. See `fairAllowances` for why, and for the measured export
+    /// that motivated it. With a single trimmable file this is still identical to the original
+    /// raw-capture-only behaviour: its share is the whole remainder.
     static func capEntries(_ entries: [FileExport.BundleEntry],
                            capBytes: Int = 20 * 1024 * 1024) -> (entries: [FileExport.BundleEntry], truncated: Bool) {
         let total = entries.reduce(0) { $0 + $1.data.count }
@@ -75,15 +80,13 @@ enum TestBundleAssembler {
         // Reserve the non-trimmable files (kept whole), then share the remainder across the trimmable ones.
         let nonTrimmable = entries.filter { !trimmableNames.contains($0.name) }.reduce(0) { $0 + $1.data.count }
         let budget = max(0, capBytes - nonTrimmable)
-        let trimmableTotal = entries.filter { trimmableNames.contains($0.name) }.reduce(0) { $0 + $1.data.count }
+        let allowance = fairAllowances(
+            sizes: entries.filter { trimmableNames.contains($0.name) }.map { ($0.name, $0.data.count) },
+            budget: budget)
         var truncated = false
         let capped = entries.map { entry -> FileExport.BundleEntry in
             guard trimmableNames.contains(entry.name) else { return entry }
-            // Each trimmable file gets a byte share proportional to its size (integer floor keeps the sum
-            // under budget, so the bundle never breaches the cap). Kept whole if already within its share.
-            let share = trimmableTotal > 0
-                ? Int(Double(budget) * Double(entry.data.count) / Double(trimmableTotal))
-                : 0
+            let share = allowance[entry.name] ?? 0
             guard entry.data.count > share else { return entry }
             truncated = true
             // Keep the tail (most recent): the last `share` bytes, then snap forward to the next full
@@ -97,8 +100,38 @@ enum TestBundleAssembler {
         return (capped, truncated)
     }
 
+    /// Split `budget` bytes across the named streams **max-min fairly**: walk them smallest-first, offering
+    /// each an equal share of whatever budget remains, and let a stream that fits under its share take only
+    /// what it needs so the surplus rolls forward to the larger ones. Integer floor keeps the sum at or under
+    /// `budget`, so the bundle can never breach the cap. Pure; `sizes` order does not affect the result.
+    ///
+    /// WHY NOT PROPORTIONAL-TO-SIZE (the original rule): it hands the budget to the BULKIEST stream, and for
+    /// these sidecars bulk is close to inversely correlated with diagnostic value. Measured on a real export
+    /// (`noop-master-iOS-v9.3.1-260809-0716.zip`, six trimmable sidecars over a 20,863,648-byte budget):
+    /// `oura-spo2.jsonl` — a per-sample dump whose values are also in the SQLite the same bundle ships —
+    /// took **53.9 %**, while `oura-raw.jsonl` got **1.9 %** (388,064 bytes: 8 min 43 s of an 8.4 h night).
+    /// The raw sidecar is the UNDECODED wire bytes, the one file in the bundle from which a protocol fact can
+    /// be re-derived independently of our own decoder, so starving it costs a night of verification that
+    /// nothing else can supply. Under this rule the ~3.47 MB fair share keeps it whole and the surplus goes
+    /// where it is merely bulk. Same 20 MB bundle, no editorial ranking of the streams.
+    static func fairAllowances(sizes: [(name: String, bytes: Int)], budget: Int) -> [String: Int] {
+        // Smallest-first, name-tiebroken so the result is deterministic regardless of input order.
+        let ordered = sizes.sorted { $0.bytes != $1.bytes ? $0.bytes < $1.bytes : $0.name < $1.name }
+        var allowance: [String: Int] = [:]
+        var left = max(0, budget)
+        var unserved = ordered.count
+        for stream in ordered {
+            let share = unserved > 0 ? left / unserved : 0
+            let give = min(max(0, stream.bytes), share)
+            allowance[stream.name] = give
+            left -= give
+            unserved -= 1
+        }
+        return allowance
+    }
+
     /// Drop bytes up to and including the first newline in `data`, so a raw byte-count tail (from
-    /// `capEntries`'s proportional trim) never starts mid-line for a newline-delimited JSONL sidecar.
+    /// `capEntries`'s fair-share trim) never starts mid-line for a newline-delimited JSONL sidecar.
     /// Returns `data` unchanged when it contains no newline (a single very-long line, or already empty)
     /// - never worse than the untrimmed behaviour, just not improved. Pure/testable.
     static func trimToLineBoundary(_ data: Data) -> Data {
