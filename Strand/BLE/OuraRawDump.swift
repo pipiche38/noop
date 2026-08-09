@@ -18,18 +18,40 @@ import WhoopStore
 /// decoded sidecars there is NO dedup high-water: a re-served record is still evidence the ring re-sent it,
 /// and the offline reframer collapses duplicates by (tag, ring-time).
 ///
+/// LIFETIME: the live file holds exactly ONE capture session. It is rolled to a single `.1` sibling when
+/// this object resolves its file for the first time — i.e. at the START of a session — and never again
+/// while the session runs. One `OuraRawDump` is built per `OuraLiveSource`, and a source survives BLE
+/// reconnects (`SourceCoordinator` returns early when the active strap is unchanged), so a drain that
+/// disconnects and re-engages several times still lands whole in one file.
+///
+/// WHY NOT a size threshold, which is what this used to do: a threshold can fire MID-DRAIN, and on
+/// 2026-08-09 it did — 25 MB rolled at 07:06:58 during the morning offload, carrying 32,005 records of
+/// that drain and 71 of the night's 75 `0x5D` records into the `.1`, which the strap-log bundle does not
+/// collect. The night's raw evidence never left the device (it was recoverable only by pulling the file
+/// off the phone by hand). Lowering the threshold makes that MORE frequent, not less; only rolling on a
+/// session boundary removes it. The corpus stays bounded because a session is bounded: an overnight
+/// drain is ~32,000 records ≈ 4 MB.
+///
+/// The multi-day corpus this used to accumulate is deliberately given up, because the bundle replaces it:
+/// every capture now carries its own COMPLETE raw sidecar, and the bundles are what get archived. One
+/// previous session is kept as `.1` purely so a session that ends without an export is not lost.
+///
 /// Location: `<Application Support>/OpenWhoop/Diagnostics/oura-raw-<deviceId>.jsonl` — beside the SQLite.
 final class OuraRawDump {
     private let deviceId: String
     private let log: (String) -> Void
+    private let directory: URL?
     private var fileURL: URL?
     private var resolveFailed = false
     private var announced = false
+    private var sessionBytes = 0
+    private var ceilingHit = false
 
-    /// Rotate the sidecar past this size (keeping one previous ".1"), so an always-on research corpus is
-    /// bounded to ~2× this on disk instead of growing forever. Matches `OuraMotionDump`/`OuraActivityDump` —
-    /// this file needs it MORE than either: full hex of every notification, and no dedup high-water.
-    private static let maxBytes = 25 * 1024 * 1024
+    /// Hard ceiling on ONE session's file. Never a rotation — a session that somehow reaches this stops
+    /// appending and says so once, because rolling mid-session is the exact failure this class was changed
+    /// to remove. Far above a real overnight drain (~4 MB), so in practice it never fires; it exists so a
+    /// pathological backlog cannot fill the disk.
+    static let maxSessionBytes = 25 * 1024 * 1024
 
     private static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -37,28 +59,18 @@ final class OuraRawDump {
         return f
     }()
 
-    init(deviceId: String, log: @escaping (String) -> Void) {
+    /// `directory` is injectable so the session-roll behaviour is testable against a temp dir; production
+    /// passes nil and gets `<Application Support>/OpenWhoop/Diagnostics`.
+    init(deviceId: String, log: @escaping (String) -> Void, directory: URL? = nil) {
         self.deviceId = deviceId
         self.log = log
+        self.directory = directory
     }
 
     /// Append one raw notification's bytes verbatim (hex-encoded), stamped with wall-clock arrival time.
     /// No-op on empty input. Best-effort: any file error is logged once and never disrupts the BLE path.
     func record(bytes: [UInt8]) {
-        guard !bytes.isEmpty, var url = resolveURL() else { return }
-
-        // Bound the corpus (rotate to a single ".1", dropping the prior one) so an always-on research sidecar
-        // can't grow unbounded — same rotation as OuraMotionDump. Read the size via a fresh FileManager stat
-        // rather than URL.resourceValues, whose cache on the reused URL can return a stale small size.
-        let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0
-        if size > Self.maxBytes {
-            let old = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".1")
-            try? FileManager.default.removeItem(at: old)
-            try? FileManager.default.moveItem(at: url, to: old)
-            fileURL = nil
-            guard let fresh = resolveURL() else { return }
-            url = fresh
-        }
+        guard !bytes.isEmpty, let url = resolveURL() else { return }
 
         let now = Date()
         let line = OuraRawDumpLine.encode(
@@ -66,11 +78,24 @@ final class OuraRawDump {
             iso: Self.iso.string(from: now), bytes: bytes)
 
         guard let data = (line + "\n").data(using: .utf8) else { return }
+
+        // Ceiling check against a running counter, not a stat per record: the file starts EMPTY each
+        // session (resolveURL rolls it), so the counter is authoritative and costs no filesystem call.
+        guard sessionBytes + data.count <= Self.maxSessionBytes else {
+            if !ceilingHit {
+                ceilingHit = true
+                log("Oura: raw capture reached its \(Self.maxSessionBytes / (1024 * 1024)) MB session "
+                    + "ceiling - no longer appending (the file is NOT rolled mid-session)")
+            }
+            return
+        }
+
         do {
             let handle = try FileHandle(forWritingTo: url)
             defer { try? handle.close() }
             try handle.seekToEnd()
             handle.write(data)
+            sessionBytes += data.count
         } catch {
             log("Oura: raw dump write failed - \(error.localizedDescription)")
             return
@@ -82,21 +107,39 @@ final class OuraRawDump {
         }
     }
 
-    /// Resolve (and create on first use) the sidecar file + its parent directory. Cached; a failure is
-    /// logged once and latched so we never spam the strap log on a read-only volume.
+    /// Resolve the sidecar file + its parent directory, ROLLING the previous session's file aside on the
+    /// first call so this session starts from empty. Cached, so the roll happens exactly once per object —
+    /// which is what makes it a session boundary rather than a size threshold. A failure is logged once and
+    /// latched so we never spam the strap log on a read-only volume.
     private func resolveURL() -> URL? {
         if let fileURL { return fileURL }
         if resolveFailed { return nil }
         do {
-            let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                   appropriateFor: nil, create: true)
-            let dir = base.appendingPathComponent("OpenWhoop/Diagnostics", isDirectory: true)
+            let dir: URL
+            if let directory {
+                dir = directory
+            } else {
+                let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                       appropriateFor: nil, create: true)
+                dir = base.appendingPathComponent("OpenWhoop/Diagnostics", isDirectory: true)
+            }
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let safeId = deviceId.replacingOccurrences(of: "/", with: "_")
             let url = dir.appendingPathComponent("oura-raw-\(safeId).jsonl")
+
+            // Session roll: keep the previous session as ".1" (dropping the one before it) and begin fresh,
+            // so the live file is always exactly this capture. An empty leftover is simply reused — rolling
+            // it would spend the one retained generation on nothing.
+            let existing = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0
+            if existing > 0 {
+                let previous = dir.appendingPathComponent(url.lastPathComponent + ".1")
+                try? FileManager.default.removeItem(at: previous)
+                try? FileManager.default.moveItem(at: url, to: previous)
+            }
             if !FileManager.default.fileExists(atPath: url.path) {
                 FileManager.default.createFile(atPath: url.path, contents: nil)
             }
+            sessionBytes = 0
             fileURL = url
             return url
         } catch {
