@@ -388,6 +388,10 @@ class OuraStreamMappingTest {
                 OuraEvent.CvaRawPpg(
                     com.noop.oura.OuraCvaPpg(ringTimestamp = 100, values = listOf(395015, 394873)),
                 ),
+                // 0x6A sleep_period_info is deliberately NOT in this list: it does produce one durable
+                // row (`breath` -> resp, see the sleepPeriodInfoMapsBreathToRespirationAndNothingElse
+                // test below). `averageHrBpm` must still never join the beat-derived HR series, asserted
+                // there.
             ),
             anchor,
         )
@@ -397,7 +401,6 @@ class OuraStreamMappingTest {
         assertTrue(s.battery.isEmpty())
         assertTrue(s.spo2.isEmpty())
         assertTrue(s.skinTemp.isEmpty())
-        assertTrue(s.resp.isEmpty())
     }
 
     // MARK: - 0x6A sleep_period_info -> respiration instrumentation
