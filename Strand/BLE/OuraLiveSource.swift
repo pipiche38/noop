@@ -366,6 +366,19 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var writeCharacteristic: CBCharacteristic?
+    /// Held so a stalled notify subscription can be toggled off/on without rediscovering the service
+    /// (`recoverStalledSubscription`). Cleared on teardown alongside `writeCharacteristic`.
+    private var notifyCharacteristic: CBCharacteristic?
+    /// When ANY notification last arrived on the notify characteristic — live push, banked record, debug
+    /// frame, anything. This is deliberately not `lastLivePulseAt`: the stall being detected is the whole
+    /// channel going silent, not just the HR stream, and on a healthy link something arrives constantly
+    /// (measured p99.9 inter-arrival gap: **4 s** over 7,493 gaps).
+    private var lastInboundAt: Date?
+    /// When the notify subscription was last toggled, so a ring that stays silent cannot make us loop.
+    private var lastSubscriptionToggleAt: Date?
+    /// True once the initial `setNotifyValue(true)` of a session has driven `advance(.ready)`. A RECOVERY
+    /// re-enable must NOT re-run the auth handshake, so `didUpdateNotificationStateFor` checks this.
+    private var notifyReadyAnnounced = false
     /// A peripheral asked to connect before `centralManagerDidUpdateState` reported `.poweredOn`.
     private var pendingConnectID: UUID?
     /// Peripherals retained by identifier so a chosen one survives until connection (exact
@@ -579,10 +592,22 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// One-shot delay before a self-chained drain pass (see `finishDrain`). Invalidated on teardown.
     private var chainedDrainTimer: Timer?
     /// Periodic re-fetch while connected, so an overnight-connected session (or one left open after a nap)
-    /// picks up freshly-banked sleep data without needing a reconnect. Mirrors BLEManager's ~15 min
-    /// periodic WHOOP history-offload floor.
+    /// picks up freshly-banked sleep data without needing a reconnect.
+    ///
+    /// MEASURED 2026-08-10 (capture `…-260810-1556`, 2h31m at 96.6% connected): this interval is not just a
+    /// backstop, it is the ACTUAL DATA CADENCE. Between fetches the ring delivered **nothing at all** —
+    /// seven arrival gaps of 893-928 s inside live sessions, clustering exactly on the old 900 s value,
+    /// while the app was awake (59-60 live-HR re-arms per gap), the link was up and the ring was worn. Only
+    /// **2.1%** of `0x80` "live HR" arrived within 15 s of its own second; the median record was **385 s**
+    /// old on arrival. So a user watching live HR was watching a 6-minute-old burst.
+    ///
+    /// 900 -> 300 s halves-and-then-some the worst-case staleness at a marginal cost: while live HR is on
+    /// the app already writes `dhr_enable`+`dhr_subscribe` every 15 s (462 commands/h measured), against
+    /// which the whole history-fetch machinery was 21 commands/h. The payload is unchanged either way — the
+    /// same records arrive, in smaller chunks — and `fetchHistoryIfIdle` is a no-op unless the driver is
+    /// idle-streaming, so a fetch never overlaps a drain.
     private var historyFetchTimer: Timer?
-    private let historyFetchInterval: TimeInterval = 900
+    private let historyFetchInterval: TimeInterval = 300
 
     /// Kick a history-fetch pass at the current cursor, but ONLY when the driver is idle-streaming (never
     /// overlaps a fetch already in flight - the driver's own phase is the guard, so this is safe to call
@@ -1226,6 +1251,8 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         if let p = peripheral { central.cancelPeripheralConnection(p) }
         peripheral = nil
         writeCharacteristic = nil
+        notifyCharacteristic = nil; notifyReadyAnnounced = false
+        lastInboundAt = nil; lastSubscriptionToggleAt = nil
         // Drain BEFORE driver.stop() clears its anchor, so a pending event still gets a real anchored
         // time if one exists rather than always falling back to wall-clock at teardown. Same for a
         // hypnogram burst still accumulating (e.g. the session ended mid-drain).
@@ -1963,6 +1990,74 @@ public final class OuraLiveSource: NSObject, ObservableObject {
             wearTracker.noteLivePulseTimeout()
             publishWearState()
         }
+        recoverStalledSubscriptionIfNeeded()
+    }
+
+    // MARK: - Stalled-subscription recovery (open_ring PROTOCOL.md s10-12)
+
+    /// How long the notify channel must be COMPLETELY silent, while connected and idle-streaming, before
+    /// the subscription is treated as stale. Chosen from measurement, not from open_ring's 30 s: over 7,493
+    /// inter-arrival gaps inside live sessions on the 2026-08-10 capture the p99.9 gap is **4 s** and the
+    /// largest healthy gap is **4 s**, while every real stall was **893-928 s**. Nothing whatsoever falls
+    /// between. 60 s therefore sits in an empty band 15x above normal, and still fires with 240 s to spare
+    /// before the 300 s history fetch would mask the stall by pulling the backlog itself.
+    private static let subscriptionStallTimeout: TimeInterval = 60
+    /// Floor between two toggles. A ring that is genuinely silent (off the finger, or simply not sending)
+    /// must cost at most one toggle per this window, never a loop.
+    private static let subscriptionToggleFloor: TimeInterval = 120
+    /// Settle time between disabling and re-enabling notifications — open_ring's value.
+    private static let subscriptionToggleGap: TimeInterval = 2.5
+
+    /// Pure policy so it is testable without a `CBCentralManager` (this class owns one and cannot be built
+    /// in a test — the same reason `reconnectStep` is factored out upstream).
+    ///
+    /// - Parameters:
+    ///   - secondsSinceInbound: age of the last notification of any kind, nil if none has ever arrived.
+    ///   - secondsSinceToggle: age of the last toggle, nil if we have not toggled this session.
+    ///   - isDraining: a history fetch is in flight (its own traffic proves the channel is alive).
+    nonisolated static func shouldToggleSubscription(secondsSinceInbound: TimeInterval?,
+                                                     secondsSinceToggle: TimeInterval?,
+                                                     isDraining: Bool) -> Bool {
+        // A drain is inbound traffic by definition; never interrupt one to "fix" the channel it is using.
+        guard !isDraining else { return false }
+        // Nothing has EVER arrived: that is the auth/handshake path's problem, not a stalled stream. The
+        // channel has to have worked once before we can call it stalled.
+        guard let quiet = secondsSinceInbound, quiet > subscriptionStallTimeout else { return false }
+        guard let sinceToggle = secondsSinceToggle else { return true }
+        return sinceToggle >= subscriptionToggleFloor
+    }
+
+    /// Clear a stale-but-alive notify subscription by toggling it off and back on.
+    ///
+    /// WHY THIS EXISTS (measured 2026-08-10, capture `…-260810-1556`). Across 2h31m at 96.6% connected the
+    /// ring delivered NOTHING for seven stretches of 893-928 s while the link was up, the app was awake
+    /// (59-60 live-HR re-arms inside each gap, against ~60 expected) and the log said `ring WORN - live HR
+    /// streaming`. The subscription was nominally active and delivering zero bytes; data only resumed when
+    /// the periodic history fetch asked for it explicitly. open_ring hits the same wall and clears it the
+    /// same way (`PROTOCOL.md` s10-12: disable, settle ~2.5 s, re-enable), which is also why their catch-up
+    /// loop polls every 20 s rather than trusting the stream.
+    ///
+    /// Cheap and non-destructive: two GATT descriptor writes, no ring command, no state machine change. The
+    /// re-enable deliberately does NOT re-run auth — see `notifyReadyAnnounced`.
+    private func recoverStalledSubscriptionIfNeeded() {
+        guard let driver, reachedStreaming, let nc = notifyCharacteristic, let p = peripheral else { return }
+        let now = Date()
+        guard Self.shouldToggleSubscription(
+            secondsSinceInbound: lastInboundAt.map { now.timeIntervalSince($0) },
+            secondsSinceToggle: lastSubscriptionToggleAt.map { now.timeIntervalSince($0) },
+            isDraining: driver.phase == .fetchingHistory) else { return }
+        let quiet = lastInboundAt.map { Int(now.timeIntervalSince($0)) } ?? -1
+        lastSubscriptionToggleAt = now
+        log("Oura: notify channel silent for \(quiet)s while connected - toggling the subscription to "
+            + "clear a stalled stream")
+        p.setNotifyValue(false, for: nc)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.subscriptionToggleGap) { [weak self] in
+            guard let self, let p = self.peripheral, let nc = self.notifyCharacteristic else { return }
+            // Re-check: a disconnect (or a genuine re-subscribe elsewhere) may have intervened.
+            guard self.reachedStreaming else { return }
+            self.log("Oura: re-enabling notifications after the toggle")
+            p.setNotifyValue(true, for: nc)
+        }
     }
 
     // MARK: - Honest needs-pairing fallback (Huami precedent)
@@ -2210,6 +2305,8 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         reassembler.reset()
         wearTracker.reset(); loggedWearState = nil; lastLivePulseAt = nil
         writeCharacteristic = nil
+        notifyCharacteristic = nil; notifyReadyAnnounced = false
+        lastInboundAt = nil; lastSubscriptionToggleAt = nil
         loggedFirstHR = false
         droppedFirstLiveHR = false
         loggedFirstTemp = false
@@ -2294,6 +2391,7 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
             log("Oura: write characteristic NOT FOUND - cannot drive the ring")
         }
         if let nc = chars.first(where: { $0.uuid == Self.notifyChar }) {
+            notifyCharacteristic = nc
             log("Oura: notify characteristic found - enabling notifications")
             peripheral.setNotifyValue(true, for: nc)
         } else {
@@ -2309,6 +2407,13 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
             log("Oura: WARNING enabling notifications FAILED - \(error.localizedDescription) - ring will send no data")
             return
         }
+        // A stalled-stream RECOVERY re-enable lands here too, and must NOT re-run auth: the secure session
+        // is already established, and replaying `.ready` would restart the nonce handshake mid-session.
+        guard !notifyReadyAnnounced else {
+            log("Oura: notifications re-enabled (isNotifying=\(characteristic.isNotifying)) after a stall toggle")
+            return
+        }
+        notifyReadyAnnounced = true
         log("Oura: notifications enabled (isNotifying=\(characteristic.isNotifying)) - beginning auth")
         // Notifications are live: tell the driver we're ready. It returns the auth-nonce request (or, with
         // no key, drives the honest needs-pairing path).
@@ -2318,6 +2423,9 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral,
                            didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard error == nil, let value = characteristic.value, characteristic.uuid == Self.notifyChar else { return }
+        // Any frame at all proves the channel is alive — the stall detector deliberately watches the whole
+        // notify channel, not just the live-HR stream (see `lastInboundAt`).
+        lastInboundAt = Date()
         let bytes = [UInt8](value)
         // The notify char carries TWO framings on the same channel (OURA_PROTOCOL.md s2):
         //   - 0x2F secure-session sub-frames (auth nonce/status, enable ACKs, live-HR pushes)
