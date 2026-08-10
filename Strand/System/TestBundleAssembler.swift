@@ -338,12 +338,21 @@ enum TestBundleAssembler {
     /// file is not one of the Oura sidecars in `ouraSidecarKinds`. `oura-<type>-<ringId>.jsonl` →
     /// `oura-<type>.jsonl`, which (a) keeps the ring id out of the bundle's filenames (redaction scrubs
     /// content, never names) and (b) lands on the `trimmableNames` set so the cap can trim it.
+    ///
+    /// A ROLLED GENERATION (`oura-<type>-<ringId>.jsonl.<n>`, written by `OuraRawDump`'s session ring) maps
+    /// to the SAME normalized name on purpose, so `ouraDiagnosticEntries`' existing largest-wins rule picks
+    /// whichever generation actually holds the capture. Before this, the `.jsonl` suffix test rejected every
+    /// generation and the bundle could only ever ship the live file — which on 2026-08-10 was a 30-second
+    /// morning session while the night's 4 MB sat in a generation the export never looked at.
     /// Pure/string-only for unit testing.
     static func normalizedOuraEntryName(forFile filename: String) -> String? {
-        for kind in ouraSidecarKinds {
-            if filename.hasPrefix("oura-\(kind)-"), filename.hasSuffix(".jsonl") {
-                return "oura-\(kind).jsonl"
-            }
+        for kind in ouraSidecarKinds where filename.hasPrefix("oura-\(kind)-") {
+            guard let range = filename.range(of: ".jsonl") else { continue }
+            let tail = filename[range.upperBound...]          // "" for the live file, ".3" for a generation
+            guard tail.isEmpty
+                    || (tail.hasPrefix(".") && tail.dropFirst().allSatisfy(\.isNumber)
+                        && tail.count > 1) else { continue }
+            return "oura-\(kind).jsonl"
         }
         return nil
     }
@@ -351,8 +360,15 @@ enum TestBundleAssembler {
     /// Gather the Oura ring's Tier-B JSONL sidecars as bundle entries, normalized names and RAW bytes (the
     /// caller redacts + caps). Enumerates the Diagnostics dir rather than reconstructing per-ring filenames,
     /// so it needs no active-ring id and picks up whatever was captured. If two rings produced the same kind
-    /// (rare), the entry names would collide; we keep the LARGEST file per normalized name (the fuller
-    /// capture is the more useful one) so the bundle never carries duplicate names.
+    /// (rare), or one ring left several rolled generations of a kind, the entry names collide; we keep the
+    /// LARGEST file per normalized name (the fuller capture is the more useful one) so the bundle never
+    /// carries duplicate names.
+    ///
+    /// ⚠️ Largest-wins means a morning export can legitimately ship a sidecar from an EARLIER session than
+    /// the live one — that is the point, and it is why the choice is safe to make blind: every line carries
+    /// its own `utc`/`iso`, so an analysis scoped to a night either finds that night's records or honestly
+    /// finds none. The alternative (shipping every generation as its own entry) would multiply the entries
+    /// competing for the export cap and starve the very file this exists to preserve.
     static func ouraDiagnosticEntries() -> [FileExport.BundleEntry] {
         guard let dir = ouraDiagnosticsDir(),
               let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
