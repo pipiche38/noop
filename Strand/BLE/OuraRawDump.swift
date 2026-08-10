@@ -18,23 +18,38 @@ import WhoopStore
 /// decoded sidecars there is NO dedup high-water: a re-served record is still evidence the ring re-sent it,
 /// and the offline reframer collapses duplicates by (tag, ring-time).
 ///
-/// LIFETIME: the live file holds exactly ONE capture session. It is rolled to a single `.1` sibling when
-/// this object resolves its file for the first time — i.e. at the START of a session — and never again
-/// while the session runs. One `OuraRawDump` is built per `OuraLiveSource`, and a source survives BLE
-/// reconnects (`SourceCoordinator` returns early when the active strap is unchanged), so a drain that
-/// disconnects and re-engages several times still lands whole in one file.
+/// LIFETIME: the live file holds exactly ONE capture session. At the START of a session — the first time
+/// this object resolves its file — the previous session is rolled into a numbered generation ring
+/// (`.1` … `.N`, newest first) and never touched again while the session runs. One `OuraRawDump` is built
+/// per `OuraLiveSource`, and a source survives BLE reconnects (`SourceCoordinator` returns early when the
+/// active strap is unchanged), so a drain that disconnects and re-engages several times still lands whole
+/// in one file.
 ///
 /// WHY NOT a size threshold, which is what this used to do: a threshold can fire MID-DRAIN, and on
 /// 2026-08-09 it did — 25 MB rolled at 07:06:58 during the morning offload, carrying 32,005 records of
-/// that drain and 71 of the night's 75 `0x5D` records into the `.1`, which the strap-log bundle does not
-/// collect. The night's raw evidence never left the device (it was recoverable only by pulling the file
-/// off the phone by hand). Lowering the threshold makes that MORE frequent, not less; only rolling on a
-/// session boundary removes it. The corpus stays bounded because a session is bounded: an overnight
-/// drain is ~32,000 records ≈ 4 MB.
+/// that drain and 71 of the night's 75 `0x5D` records into the `.1`. Lowering the threshold makes that
+/// MORE frequent, not less; only rolling on a session boundary removes it. The corpus stays bounded
+/// because a session is bounded: an overnight drain is ~32,000 records ≈ 4 MB.
 ///
-/// The multi-day corpus this used to accumulate is deliberately given up, because the bundle replaces it:
-/// every capture now carries its own COMPLETE raw sidecar, and the bundles are what get archived. One
-/// previous session is kept as `.1` purely so a session that ends without an export is not lost.
+/// WHY A RING AND NOT ONE `.1`, which is what the first version of this did: **retaining a single
+/// generation is not enough to survive an ordinary morning.** Measured 2026-08-10 — the app relaunched
+/// twice after wake (07:45 and 08:17 local), so by the time the capture was pulled off the phone BOTH
+/// retained slots held post-wake sessions of 87 KB and 44 KB, and the night's 4 MB was gone. Session
+/// scoping fixed the mid-drain roll and then lost the night a different way: rotation ate a night every
+/// ~5–6 days at random; one-deep session scoping ate it every morning the app restarted twice, which is
+/// the normal morning. An iOS app is relaunched whenever the user opens it, so the number of session
+/// boundaries between a night and its export is not something this class can predict — it can only keep
+/// enough of them.
+///
+/// Two rules keep the ring honest, and both exist because of that measurement:
+///   * a session under `minRolledBytes` is DISCARDED rather than rolled, so a connect that captured
+///     essentially nothing (the 44 KB one above) cannot evict a real overnight capture;
+///   * the retained generations are pruned oldest-first to `maxRetainedBytes`, so the ring is bounded in
+///     BYTES and not merely in file count (each generation may be up to `maxSessionBytes`).
+///
+/// `TestBundleAssembler` ships the LARGEST generation for this kind, so the export carries the night even
+/// when the live file is a fresh 30-second session — which is exactly the state a morning export is taken
+/// in. Keeping generations on disk without that change would only help someone with a USB cable.
 ///
 /// Location: `<Application Support>/OpenWhoop/Diagnostics/oura-raw-<deviceId>.jsonl` — beside the SQLite.
 final class OuraRawDump {
@@ -52,6 +67,21 @@ final class OuraRawDump {
     /// to remove. Far above a real overnight drain (~4 MB), so in practice it never fires; it exists so a
     /// pathological backlog cannot fill the disk.
     static let maxSessionBytes = 25 * 1024 * 1024
+
+    /// How many completed sessions are kept beside the live file, as `.1` (newest) … `.N` (oldest). Eight
+    /// covers a morning of app relaunches with room to spare, and at a typical ~4 MB overnight session the
+    /// whole ring is ~32 MB — well inside `maxRetainedBytes`, which is what actually bounds it.
+    static let retainedGenerations = 8
+
+    /// A finished session smaller than this is deleted instead of rolled. It is not a judgement about which
+    /// captures matter — it is the one rule that stops a burst of trivial reconnect sessions from flushing
+    /// the ring. 16 KB is ~100 records: a connect that drained nothing. Deliberately far below the 44 KB
+    /// session that destroyed the 2026-08-10 capture, so the rule is a backstop and the ring does the work.
+    static let minRolledBytes = 16 * 1024
+
+    /// Byte budget for the retained generations (the live file is excluded — it has its own ceiling).
+    /// Pruned oldest-first, so a pathological run of large sessions cannot fill the disk.
+    static let maxRetainedBytes = 64 * 1024 * 1024
 
     private static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -127,14 +157,16 @@ final class OuraRawDump {
             let safeId = deviceId.replacingOccurrences(of: "/", with: "_")
             let url = dir.appendingPathComponent("oura-raw-\(safeId).jsonl")
 
-            // Session roll: keep the previous session as ".1" (dropping the one before it) and begin fresh,
-            // so the live file is always exactly this capture. An empty leftover is simply reused — rolling
-            // it would spend the one retained generation on nothing.
-            let existing = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0
-            if existing > 0 {
-                let previous = dir.appendingPathComponent(url.lastPathComponent + ".1")
-                try? FileManager.default.removeItem(at: previous)
-                try? FileManager.default.moveItem(at: url, to: previous)
+            // Session roll: shift the previous session into the generation ring and begin fresh, so the live
+            // file is always exactly this capture. A leftover that captured essentially nothing (including an
+            // empty one) is dropped rather than rolled — spending a generation on it is how the 2026-08-10
+            // capture was lost.
+            let existing = Self.byteSize(url)
+            if existing >= Self.minRolledBytes {
+                rollGenerations(in: dir, base: url)
+                pruneRetained(in: dir, base: url)
+            } else if existing > 0 {
+                try? FileManager.default.removeItem(at: url)
             }
             if !FileManager.default.fileExists(atPath: url.path) {
                 FileManager.default.createFile(atPath: url.path, contents: nil)
@@ -147,5 +179,55 @@ final class OuraRawDump {
             log("Oura: raw dump unavailable - \(error.localizedDescription)")
             return nil
         }
+    }
+
+    /// The generation file for `index` (1 = newest retained session).
+    static func generationURL(base: URL, index: Int) -> URL {
+        base.deletingLastPathComponent()
+            .appendingPathComponent(base.lastPathComponent + ".\(index)")
+    }
+
+    private static func byteSize(_ url: URL) -> Int {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0
+    }
+
+    /// Shift the ring up by one: the oldest generation is dropped, every other moves down a slot, and the
+    /// finished live file becomes `.1`. Best-effort throughout — a failed move must never break the BLE
+    /// path, and the worst outcome is one lost generation rather than a lost session.
+    private func rollGenerations(in dir: URL, base url: URL) {
+        let oldest = Self.generationURL(base: url, index: Self.retainedGenerations)
+        try? FileManager.default.removeItem(at: oldest)
+        var index = Self.retainedGenerations - 1
+        while index >= 1 {
+            let from = Self.generationURL(base: url, index: index)
+            let to = Self.generationURL(base: url, index: index + 1)
+            if FileManager.default.fileExists(atPath: from.path) {
+                try? FileManager.default.removeItem(at: to)
+                try? FileManager.default.moveItem(at: from, to: to)
+            }
+            index -= 1
+        }
+        try? FileManager.default.moveItem(at: url, to: Self.generationURL(base: url, index: 1))
+    }
+
+    /// Drop retained generations oldest-first until they fit `maxRetainedBytes`. Counts only the ring: the
+    /// live file has its own per-session ceiling and is not part of this budget.
+    private func pruneRetained(in dir: URL, base url: URL) {
+        var total = 0
+        var kept: [URL] = []
+        for index in 1...Self.retainedGenerations {
+            let gen = Self.generationURL(base: url, index: index)
+            let size = Self.byteSize(gen)
+            guard size > 0 else { continue }
+            total += size
+            kept.append(gen)
+        }
+        guard total > Self.maxRetainedBytes else { return }
+        for gen in kept.reversed() {           // oldest slot first
+            guard total > Self.maxRetainedBytes else { break }
+            total -= Self.byteSize(gen)
+            try? FileManager.default.removeItem(at: gen)
+        }
+        log("Oura: raw capture ring pruned to its \(Self.maxRetainedBytes / (1024 * 1024)) MB budget")
     }
 }
