@@ -109,6 +109,27 @@ final class TestBundleAssemblerTests: XCTestCase {
         XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(forFile: "oura-raw.txt"))
     }
 
+    /// A ROLLED GENERATION must normalize to the same entry name as the live file, so
+    /// `ouraDiagnosticEntries`' largest-wins rule can ship the generation that actually holds the capture.
+    /// Before this, `hasSuffix(".jsonl")` rejected every `.jsonl.<n>` and a morning export could only ever
+    /// carry the live file — a 30-second session, while the night sat in a generation nothing looked at
+    /// (measured 2026-08-10).
+    func testRolledGenerationsNormalizeToTheSameEntryName() {
+        for suffix in [".jsonl.1", ".jsonl.2", ".jsonl.8", ".jsonl.12"] {
+            XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
+                forFile: "oura-raw-oura-2H3B2405003655" + suffix), "oura-raw.jsonl", suffix)
+        }
+        XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
+            forFile: "oura-spo2-oura-2H3B2405003655.jsonl.3"), "oura-spo2.jsonl")
+        // A non-numeric or empty tail is NOT a generation — those are someone else's files, not ours.
+        XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(
+            forFile: "oura-raw-oura-2H3B2405003655.jsonl.bak"))
+        XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(
+            forFile: "oura-raw-oura-2H3B2405003655.jsonl."))
+        XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(
+            forFile: "oura-raw-oura-2H3B2405003655.jsonl.1.gz"))
+    }
+
     func testNormalizedOuraNamesAreAllTrimmable() {
         // Every normalized sidecar name must be in the cap's trimmable set, else a big night's dump could
         // blow the 20 MB cap instead of being tail-trimmed.
