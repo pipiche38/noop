@@ -335,23 +335,130 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// (#414) and the Android `ReconnectBackoff` so a ring genuinely out of range doesn't hammer BLE.
     private var failedReconnectAttempts = 0
 
+    /// After this many consecutive failures, stop scheduling timed retries and hand the reconnect to
+    /// CoreBluetooth as a STANDING connect (see `issueStandingConnect`). Three keeps the quick 3s/6s
+    /// retries that fix a transient blip while the app is awake, then gets out of the way.
+    nonisolated static let standingConnectAfterAttempts = 3
+
+    /// Floor between two standing connects. A standing connect normally never fails — it simply waits — but
+    /// an encryption/bond hiccup can fail one fast, and re-issuing on that callback would be a hot loop that
+    /// drains both the ring and the phone. Re-issue no more than once per this interval; the wait is spent
+    /// on the timer path, which is exactly the pre-existing behaviour and no worse.
+    nonisolated static let standingConnectRetryFloor: TimeInterval = 30
+
+    /// When the current standing connect was issued, or nil when none is outstanding.
+    private var standingConnectAt: Date?
+
     /// Next backoff delay, capped at 60s, matching BLEManager's `min(60, 3 * 2^(n-1))` and the Android twin.
     private func nextReconnectDelay() -> TimeInterval {
         min(60.0, 3.0 * pow(2.0, Double(max(0, failedReconnectAttempts - 1))))
     }
 
-    /// Schedule an auto-reconnect to the paired ring after a backoff delay, unless the teardown was
-    /// intentional or there is no known ring. Guarded again inside the deferred block: a `stop()` that
-    /// lands in the meantime cancels the pending reconnect (it re-checks `intentionalDisconnect` and that
+    /// What to do after an involuntary drop or a failed connect. Split out as a PURE function so the policy
+    /// is unit-testable with no CoreBluetooth, no radio and no ring — `OuraLiveSource` itself owns a
+    /// `CBCentralManager` and cannot be built in a test.
+    enum ReconnectStep: Equatable, Sendable {
+        /// Retry through the ordinary `connect(_:)` path after `delay`. The app is awake (it just received
+        /// the callback), so a short timer genuinely fixes a transient blip.
+        case timedRetry(delay: TimeInterval)
+        /// Hand off to CoreBluetooth now: leave a standing connect outstanding, which survives suspension.
+        case standingConnect
+        /// A standing connect failed fast; re-issue one after `delay` rather than looping on the callback.
+        case standingConnectAfter(delay: TimeInterval)
+    }
+
+    /// - Parameters:
+    ///   - attempt: the 1-based consecutive failure count (`failedReconnectAttempts` after incrementing).
+    ///   - secondsSinceStandingConnect: age of the outstanding standing connect, or nil when none is.
+    nonisolated static func reconnectStep(attempt: Int,
+                                         secondsSinceStandingConnect: TimeInterval?) -> ReconnectStep {
+        guard attempt >= standingConnectAfterAttempts else {
+            return .timedRetry(delay: min(60.0, 3.0 * pow(2.0, Double(max(0, attempt - 1)))))
+        }
+        // No standing connect outstanding reads as "long ago", so the first time we get here we hand off
+        // immediately rather than sitting out a floor we never started.
+        let since = secondsSinceStandingConnect ?? .greatestFiniteMagnitude
+        guard since < standingConnectRetryFloor else { return .standingConnect }
+        return .standingConnectAfter(delay: standingConnectRetryFloor - since)
+    }
+
+    /// Hand the reconnect to CoreBluetooth: `central.connect(_:options:)` has **no timeout**, so it stays
+    /// outstanding indefinitely and iOS wakes the app when the ring advertises again — including while the
+    /// app is SUSPENDED, which is the whole point.
+    ///
+    /// WHY THIS EXISTS (measured 2026-08-10 11:16, build `9bd45fef`). The link dropped at 11:16:38, two
+    /// connects failed fast on `Failed to encrypt the connection`, and attempt 3 was scheduled for ~11:17:06.
+    /// It actually ran at **11:29:27 — 12m33s late**, when the phone was next picked up, with zero log lines
+    /// in between: `DispatchQueue.main.asyncAfter` does not run in a suspended app, the deadline just passes
+    /// and the block fires on resume. The ring was down for **12m51s of a 27m window (47%)** and the wearer
+    /// noticed. The damage is not the late timer — it is that after `didFailToConnect` the old code held
+    /// **nothing** outstanding, so there was no way to notice the ring at all.
+    ///
+    /// This is a DIFFERENT hole from the state restoration in #1213/#1215: that one is the app being
+    /// TERMINATED and relaunched; this one is the app merely being SUSPENDED, which overnight is far more
+    /// common. Neither fixes the other.
+    ///
+    /// No new outbound command: `central.connect` is the same call `connect(_:)` already makes.
+    private func issueStandingConnect(_ id: UUID) {
+        guard !intentionalDisconnect, reconnectID == id else { return }
+        guard let p = seenPeripherals[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first else {
+            // No peripheral object to hand CoreBluetooth (never seen on this device). Fall back to the
+            // ordinary connect path, which scans for it — that is the only way to acquire one.
+            log("Oura: ring \(id) not cached - scanning instead of leaving a standing connect")
+            connect(id)
+            return
+        }
+        seenPeripherals[id] = p
+        peripheral = p
+        p.delegate = self
+        guard central.state == .poweredOn else {
+            // `centralManagerDidUpdateState` replays this on poweredOn.
+            pendingConnectID = id
+            log("Oura: standing reconnect deferred - Bluetooth not powered on (state=\(central.state.rawValue))")
+            return
+        }
+        standingConnectAt = Date()
+        log("Oura: leaving a STANDING connect outstanding for \(id) - CoreBluetooth will reconnect "
+            + "whenever the ring is reachable, including while the app is suspended")
+        central.connect(p, options: nil)
+    }
+
+    /// Re-reach the paired ring after an involuntary drop or a failed connect, unless the teardown was
+    /// intentional or there is no known ring.
+    ///
+    /// Two regimes, deliberately: the first few attempts use a short timed backoff (the app is awake — it
+    /// just received the callback — so a 3s/6s retry fixes a transient blip fast), and after that it hands
+    /// off to a STANDING CoreBluetooth connect that survives suspension. The timed block is guarded again on
+    /// wake: a `stop()` that lands in the meantime cancels it (it re-checks `intentionalDisconnect` and that
     /// the target is unchanged), so a deliberate teardown never races a stale reconnect.
     private func scheduleReconnect() {
         guard !intentionalDisconnect, let id = reconnectID else { return }
         failedReconnectAttempts += 1
-        let delay = nextReconnectDelay()
-        log("Oura: reconnecting in \(Int(delay))s (attempt \(failedReconnectAttempts))")
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, !self.intentionalDisconnect, self.reconnectID == id else { return }
-            self.connect(id)
+
+        switch Self.reconnectStep(attempt: failedReconnectAttempts,
+                                  secondsSinceStandingConnect: standingConnectAt.map {
+                                      Date().timeIntervalSince($0)
+                                  }) {
+        case .standingConnect:
+            issueStandingConnect(id)
+
+        case .standingConnectAfter(let wait):
+            // A standing connect failed fast (an encryption/bond hiccup, not "out of range"). Wait out the
+            // floor before re-issuing rather than looping on the failure callback.
+            log("Oura: standing connect failed early - re-issuing in \(Int(wait))s "
+                + "(attempt \(failedReconnectAttempts))")
+            standingConnectAt = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                guard let self, !self.intentionalDisconnect, self.reconnectID == id else { return }
+                self.issueStandingConnect(id)
+            }
+
+        case .timedRetry(let delay):
+            log("Oura: reconnecting in \(Int(delay))s (attempt \(failedReconnectAttempts))")
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, !self.intentionalDisconnect, self.reconnectID == id else { return }
+                self.connect(id)
+            }
         }
     }
 
@@ -842,6 +949,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         // is never the intentional-teardown case, so clear the suppression flag.
         reconnectID = id
         intentionalDisconnect = false
+        standingConnectAt = nil   // an explicit connect supersedes any standing one
         let p = seenPeripherals[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first
         guard let p else {
             // Never seen by this Mac/iPhone yet -> remember it and scan; didDiscover connects on sight.
@@ -869,6 +977,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         intentionalDisconnect = true
         reconnectID = nil
         failedReconnectAttempts = 0
+        standingConnectAt = nil   // cancelPeripheralConnection below also cancels any standing connect
         stopScan()
         pendingConnectID = nil
         stopReengageTimer()
@@ -1562,6 +1671,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         intentionalDisconnect = true
         reconnectID = nil
         failedReconnectAttempts = 0
+        standingConnectAt = nil   // the cancel below also drops any standing connect
         if let p = peripheral { central.cancelPeripheralConnection(p) }
         guard needsPairing == nil else { return }
         let detail: String
@@ -1670,6 +1780,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         log("Oura: connected - discovering services")
         failedReconnectAttempts = 0   // a real connection clears the reconnect backoff (#912)
+        standingConnectAt = nil       // whatever was outstanding has landed
         peripheral.delegate = self
         // Fresh driver per connection so a new session re-runs auth (the app key is session-scoped). The
         // driver's `allowKeyInstall` is gated on this connection's adopt consent ONLY: with no consent the
