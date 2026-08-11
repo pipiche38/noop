@@ -315,6 +315,10 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Append-only JSONL research corpus for the SpO2 stream (Tier-A, already persisted to `spo2Sample` -
     /// this sidecar exists for the raw→% calibration investigation, see OuraSpO2Dump).
     private let spo2Dump: OuraSpO2Dump?
+    /// Append-only JSONL research corpus for 0x6A sleep_period_info (Tier-B; the ring's own mean HR and its
+    /// CANDIDATE breath rate). Never persisted, never scored - it exists so the respiration series can be
+    /// compared against WHOOP's RR offline WITHOUT depending on the strap log surviving. See OuraRespDump.
+    private let respDump: OuraRespDump?
     /// Append-only JSONL capture of the RAW, undecoded history-drain notification bytes (`oura-raw-<id>.jsonl`).
     /// Complement to the decoded sidecars above: those show what NOOP interpreted, this shows exactly what the
     /// ring sent, so after a full connect a hole in a decoded file can be pinned as a decode drop vs ring-side.
@@ -1195,6 +1199,8 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         self.realStepsDump = feedsLive && !deviceId.isEmpty ? OuraRealStepsDump(deviceId: deviceId, log: log) : nil
         // SpO2 raw→% calibration research corpus: same gate as the other dumps.
         self.spo2Dump = feedsLive && !deviceId.isEmpty ? OuraSpO2Dump(deviceId: deviceId, log: log) : nil
+        // 0x6A sleep_period (breath-rate candidate) corpus: same gate as the other Tier-B dumps.
+        self.respDump = feedsLive && !deviceId.isEmpty ? OuraRespDump(deviceId: deviceId, log: log) : nil
         super.init()
         // Dedicated queue-less central -> callbacks arrive on the main queue, matching @MainActor.
         #if os(iOS)
@@ -2121,9 +2127,18 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 log("Oura: sleep_period (Tier-B) [\(periodWhen)] hr=\(info.averageHrBpm) "
                     + "trend=\(info.hrTrend) breath=\(info.breathsPerMin) "
                     + "breathV=\(info.breathVariability) motion=\(info.motionCount) state=\(info.sleepState)")
+                // ...and ALSO into its own tiny sidecar, because the log line above is not durable enough to
+                // settle the question: three consecutive overnight captures lost it to an app restart after
+                // wake, and a morning-only bundle then cannot supply the NOOP half of the WHOOP-RR comparison.
+                // Anchored records only - an un-anchored one has no real time axis and re-arrives anchored on
+                // the next drain, and a respiration series at fabricated times is worse than no series.
                 if let ts = driver.unixSeconds(forRingTimestamp: info.ringTimestamp) {
                     enqueue([e], ts: ts)
                     noteStoredHistoryRingTime(info.ringTimestamp)
+                    respDump?.record(ringTs: info.ringTimestamp, utc: ts, hr: info.averageHrBpm,
+                                     hrTrend: info.hrTrend, mzci: info.mzci, dzci: info.dzci,
+                                     breath: info.breathsPerMin, breathV: info.breathVariability,
+                                     motion: info.motionCount, state: info.sleepState, cv: info.cv)
                 } else {
                     pendingAnchorEvents.append((e, info.ringTimestamp))
                 }
