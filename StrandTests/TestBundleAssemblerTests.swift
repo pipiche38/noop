@@ -103,6 +103,10 @@ final class TestBundleAssemblerTests: XCTestCase {
             forFile: "oura-real-steps-oura-2H3B2405003655.jsonl"), "oura-real-steps.jsonl")
         XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
             forFile: "oura-spo2-oura-2H3B2405003655.jsonl"), "oura-spo2.jsonl")
+        // The 0x6A respiration corpus: it exists precisely so a morning-only bundle can still carry the
+        // night's breath series, so a bundler that dropped it would defeat the whole point of the file.
+        XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
+            forFile: "oura-resp-oura-2H3B2405003655.jsonl"), "oura-resp.jsonl")
         // Non-sidecar files are ignored.
         XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(forFile: "raw-capture.jsonl"))
         XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(forFile: "whoop.sqlite"))
