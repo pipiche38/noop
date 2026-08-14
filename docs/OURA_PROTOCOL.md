@@ -649,17 +649,59 @@ like its sibling banked streams (`.hrv`/`.temp`/`.spo2`/`.sleepPhase`) — the f
   resolution, not an artifact. Cadence ≈ **296 s**, and the tag is emitted only during sleep periods
   (the 4 nights' records span far less wall-clock than their ring-time range).
 
-  ⚠️ **`breath` is NAMED, not VALIDATED — Tier B, and the #194 bar is not cleared.** No respiratory
-  ground truth has been held against it: the numbers are plausible (textbook sleeping RR, co-varying
-  weakly with HR at r ≈ +0.35 and independent of motion at r ≈ −0.02) and self-consistent over four
-  nights, but plausibility on N nights is not *tracking*. Promotion needs ≥ 2 nights where a reference
-  respiratory rate MOVES and this channel moves with it. NOOP therefore decodes 0x6A
-  (`OuraDecoders.decodeSleepPeriodInfo` → `OuraEvent.sleepPeriodInfo`, both platforms), gates it behind
-  `allowTierB`, logs it for investigation, and **never** folds it into `OuraStreamMapping`/scoring —
-  neither `average_hr` into the beat-derived HR series (different cadence, different provenance) nor
-  `breath` into any surfaced respiratory rate. Both decoders also **return nil/null when either declared
-  invariant is violated**: the source's own parser throws there, so such a body is not this layout, and
-  "not decoded" is the honest answer. It costs nothing — all 3 493 real records pass.
+  ⚠️ **`breath` is the RING's own measurement, not a NOOP-derived estimate — Tier B on decode
+  provenance, stored, and on a ring night it IS the scored `dailyMetric.respRateBpm` (see the three
+  constraints below).** The
+  distinction matters: the #194 rule governs signals NOOP *derives* from raw sensor data (PPG→HR
+  autocorrelation, RSA-from-R-R), where the method can manufacture a plausible number. Here the firmware
+  computes it and NOOP only decodes a field, the same standing as the ring's own SleepNet hypnogram —
+  which NOOP already persists and scores from. What must be right is the decode.
+
+  Both decoders **return nil/null when either declared invariant is violated**: the source's own
+  parser throws there, so such a body is not this layout, and "not decoded" is the honest answer. It
+  costs nothing — all 3 493 real records pass. `average_hr` is still **never** folded into a stream: it
+  would join the beat-derived HR series at a different cadence and a different provenance.
+
+  **What the cross-checks say.** The strongest one is not against WHOOP: these records median
+  **14.75/min** against the SAME wearer's **851-night Oura APP export** at median 15.250 (IQR
+  14.875–15.625) — the same quantity in the same band, which is byte 4 checked against Oura's own
+  reported respiratory rate. ⚠️ Distribution, NOT paired: the export ends 2026-07-07 and these records
+  start 2026-08-05, and a paired test is impossible by construction (the ring pairs to ONE app at a
+  time, so while NOOP holds it nothing reaches Oura's cloud). Against a WHOOP worn on the same nights,
+  measured over 18 nights of that wearer's history carrying both vendors, **Oura's own app scores
+  r = +0.680 against WHOOP**, with Oura below
+  WHOOP on 18/18 nights (Δ −1.158, sd 0.359). That is a **ceiling** on any Oura-derived respiratory
+  rate, not a target — and this decode already sits at it: **r = +0.599** over 6 paired nights (**+0.748**
+  over the 4 with good coverage), Δ −1.458 with the sign stable 6/6, of which −1.158 is the measured
+  vendor offset and only **~−0.30** is this decode's own residual. That residual is *implied*, never
+  pairable, because the two references are mutually exclusive per night. The internal falsifier passed:
+  mapping each night to the WRONG date collapses r from +0.591 to **−0.151**, so the agreement is
+  date-aligned rather than coincidental. Within the Oura-app distribution above, our medians sit on the
+  **low side** (~12th pct) — inside the band, not centred in it.
+
+  ⇒ Judging this decode by "does it beat WHOOP" would ask it to beat **Oura's own app** at reproducing
+  WHOOP — the wrong test for a vendor-computed value, and an impossible one. So NOOP maps **`breath`
+  only** onto a `respSample` row under the RING's deviceId (`OuraStreamMapping`, both platforms), in
+  **milli-breaths-per-minute** (`raw == wireByte × 125`, exact for all 256 wire values — the same table
+  otherwise carries a WHOOP's raw respiration ADC waveform, a different quantity, so the row's owner is
+  what distinguishes them, via `OuraRespScale`). It is shown on the day/Deep-Timeline respiration track
+  in breaths/min, and it **becomes the night's `dailyMetric.respRateBpm`** — the scored slot — in place of
+  NOOP's RSA-from-R-R estimate, which on a ring night is built from banked R-R and carries no breathing
+  information at all (shuffling the night returns the same 13.3333 bpm). Three constraints ride with that:
+  1. **Coverage, not trust:** the night's value is the MEDIAN of the rows inside a matched in-bed session,
+     and only when they SPAN ≥ 1 h (`AnalyticsEngine.vendorRespMinSpanS`) and the median lands inside the
+     8–25 bpm band the RSA path is clamped to. A 36-minute tail of a night is not that night's
+     respiration — and the gate is on span, not row count, because the record cadence is not constant
+     (real nights hold both ~30 s and ~296 s spacing).
+  2. **The baseline is scoped to the current device era** (`Baselines.deviceEraEpoch`, #459). A WHOOP
+     export reports its own measured rate (~16.1 on the reference history) and the ring reports ~14.6, so
+     pooling them in one 28-day baseline turns a strap SWITCH into a ~3σ illness-ward step against a
+     ~0.52 bpm spread — a device artifact scored as physiology. A single-brand history is unaffected
+     (the epoch is 0.0, i.e. the fold is byte-identical to before).
+  3. **It never reaches the sleep stager.** `OuraRespScale.forScoring` keeps it out: the stager reads
+     `respSample` as a ~1 Hz raw ADC WAVEFORM and would run a peak detector over a per-window RATE — a
+     shape mismatch, not a trust one, and the same reason 0x47 motion is never folded into
+     `gravitySample` (#804).
 
   📌 **This does not retract the respiratory-rate gate.** That work proved RSA is unrecoverable *from
   banked IBI* (shuffling the beats returns the same value; re-timing defeats the gate) and refusing to

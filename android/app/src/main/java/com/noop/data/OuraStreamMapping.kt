@@ -2,6 +2,7 @@ package com.noop.data
 
 import com.noop.oura.OuraEvent
 import com.noop.oura.OuraIbiChannel
+import com.noop.protocol.RespSample
 import com.noop.protocol.RrSourceChannel
 import com.noop.protocol.SkinTempSample
 import com.noop.protocol.Spo2Sample
@@ -214,17 +215,62 @@ object OuraStreamMapping {
                     out.events.add(WhoopEvent(ts = ts, kind = EVENT_MOTION, payload = payload))
                 }
 
+                is OuraEvent.SleepPeriodInfo -> {
+                    // 0x6A `breath` -> a `respSample` row under the RING's deviceId, and on a ring night
+                    // that row set supplies the SCORED `dailyMetric.respRateBpm`
+                    // ([AnalyticsEngine.vendorRespRateBpm] takes the in-session median).
+                    // [OuraRespScale.forScoring] still refuses these rows at the STAGING read - a
+                    // per-window rate is the wrong shape for a peak detector expecting a ~1 Hz raw ADC
+                    // waveform.
+                    //
+                    // Why this one field is stored: `breath` is the RING's own measurement, read off the
+                    // wire - not a signal NOOP derives from raw sensor data. The #194 rule governs the
+                    // latter (PPG->HR, RSA-from-R-R: methods where NOOP invents the number), so the
+                    // question here is whether the DECODE is right, and that is settled structurally:
+                    // 3,493 records over four nights, every value an exact multiple of 0.125, both of the
+                    // source's declared invariants upheld. It has the same standing as the ring's own
+                    // hypnogram, which NOOP already persists and scores from (#773/#877). Cross-checks, in
+                    // order of weight: these records median 14.75/min against the SAME wearer's 851-night
+                    // Oura APP export at 15.250 (IQR 14.875-15.625) - same quantity, same band
+                    // (distribution, not paired: the corpora do not overlap in date); against a WHOOP worn
+                    // the same nights the decode reproduces the VENDOR's own offset (Oura below WHOOP
+                    // 18/18, delta -1.158; ours delta -1.458 sign-stable 6/6, r = +0.599 / +0.748
+                    // well-covered, against Oura's own +0.680 ceiling); and the date falsifier passed
+                    // (wrong mapping collapses r to -0.151).
+                    //
+                    // Scale: `raw` is MILLI-breaths-per-minute ([OuraRespScale]), exact for every wire
+                    // value rather than merely close. `respSample.raw` otherwise carries a WHOOP raw ADC
+                    // WAVEFORM sample - a different physical quantity in the same table - so the row's
+                    // owner is what tells the two apart, and [OuraRespScale] is the one place that knows.
+                    //
+                    // What this record does NOT persist, and why: `averageHrBpm` would land in the same
+                    // `hr` series as the beat-derived channel at a different cadence and provenance;
+                    // `breathVariability` / `mzci` / `dzci` / `cv` are named but uninterpreted;
+                    // `sleepState` has no documented code meaning. They stay in the investigation log.
+                    // The scored slot `dailyMetric.respRateBpm` is fed from these rows in AnalyticsEngine,
+                    // not here - this layer only mints the durable row; the coverage guards and the
+                    // era-scoped baseline that make it safe to score live there.
+                    // PARITY: the Swift twin stores the IDENTICAL integer for a given decoded value.
+                    val ts = anchor(ev.value.ringTimestamp) ?: continue
+                    out.resp.add(
+                        RespSample(
+                            ts = ts,
+                            raw = OuraRespScale.milliBpm(ev.value.breathsPerMin),
+                            unit = OuraRespScale.UNIT_TAG,
+                        ),
+                    )
+                }
+
                 // Motion / state / time-sync / rtc / debug / TierB / ActivityInfo / CvaRawPpg /
                 // RealStepsFields never map onto a scored stream. In particular the 0x50 activity/MET
                 // decode (PR #960) NEVER mints a `steps` row: the formula is third-party and unvalidated
                 // (Tier B, OURA_PROTOCOL.md s6.13), and MET is not a step count - fabricating one would
-                // break the honest-data invariant and the per-source day-owner rules. Same discipline
-                // applies to 0x81 CVA raw PPG (OURA_PROTOCOL.md s6.14) and 0x7E/0x7F real_steps (s6.13) -
-                // decoded, logged, never scored, not even real_steps' leading candidate field.
-                // Same discipline again for 0x6A sleep_period_info (s6.12), where there are two ways
-                // to leak and both are barred: its `averageHrBpm` must not join the beat-derived HR
-                // series (different cadence, different provenance), and its `breathsPerMin` is a NAMED
-                // CANDIDATE with no respiratory ground truth behind it.
+                // break the honest-data invariant and the per-source day-owner rules. Same discipline for
+                // 0x81 CVA raw PPG (s6.14) and 0x7E/0x7F real_steps (s6.13) - decoded, logged, never
+                // scored, not even real_steps' leading candidate field. 0x6A used to be dropped here too; it is
+                // now mapped above, to ONE stream and one field. Its `averageHrBpm` is still refused,
+                // for the reason that kept the whole record out - it would join the beat-derived HR
+                // series at a different cadence and a different provenance.
                 else -> Unit
             }
         }

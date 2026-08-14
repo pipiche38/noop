@@ -356,13 +356,34 @@ public struct OuraRealStepsFields: Equatable, Sendable, Codable {
 /// WHOOP-validated against RHR 55). The `× 0.5` scale is settled by its falsifier: read as `× 1.0`
 /// the same records sit +56 … +62 bpm above every other HR channel we hold.
 ///
-/// NOT VALIDATED, and this is the whole reason it stays Tier B: nothing here shows `breath` IS a
-/// respiratory rate. It is plausible (median 14.4/min, IQR 13.1–15.4, co-varying weakly with HR at
-/// r ≈ +0.35 and independent of motion at r ≈ −0.02) and self-consistent across four nights, but there
-/// is no respiratory ground truth in hand, and per the #194 bar plausibility on N nights is not
-/// tracking — that needs ≥ 2 nights where a reference respiratory rate MOVES and this one moves with
-/// it. Until then: emitted only behind `OuraDriver.allowTierB`, logged for investigation, and NEVER
-/// folded into `OuraStreamMapping`/scoring.
+/// WHOSE measurement this is decides which bar applies. `breath` is computed BY THE RING and read off
+/// the wire — it is not a signal NOOP derives from raw sensor data. The #194 rule is written for the
+/// opposite case (PPG→HR autocorrelation, RSA-from-R-R: methods where NOOP invents the number and can
+/// manufacture a peak that looks physiological), so what has to be right here is the DECODE, which is
+/// what the structural verification above establishes. Same standing as the ring's own SleepNet
+/// hypnogram, which NOOP already persists and scores from (#773 / #877).
+///
+/// Independent support that byte 4 is the quantity Oura's own app calls respiratory rate: these
+/// records median 14.75/min against the SAME wearer's 851-night Oura app export at 15.250 (IQR
+/// 14.875–15.625) — same quantity, same band, though the two corpora do not overlap in date so this is
+/// a distribution check, not a paired one. Against a WHOOP worn on the same nights the decode also
+/// reproduces the VENDOR's own offset (Oura reads below WHOOP 18/18 nights, Δ −1.158; ours Δ −1.458,
+/// sign-stable 6/6), and mapping each night to the wrong date collapses the agreement (r +0.591 →
+/// −0.151), so it is date-aligned rather than coincidental.
+///
+/// It stays Tier B because the field NAMES come from third-party reverse engineering, not from Oura
+/// documentation — a decode-provenance caveat, not a doubt about whether the ring measures respiration.
+///
+/// `OuraStreamMapping` maps `breathsPerMin` — and nothing else from this record — to a `respSample` row
+/// in milli-bpm under the ring's own deviceId, and `AnalyticsEngine` takes the night's median of those
+/// rows as `dailyMetric.respRateBpm`: on a ring night that replaces an RSA-from-banked-R-R estimate
+/// which carries no breathing information at all (shuffling the night returns the same 13.3333 bpm).
+/// The baseline that value feeds is scoped to the current device era (`Baselines.deviceEraEpoch`, #459)
+/// so a strap switch — WHOOP reads ~16.1, the ring ~14.6 — is not folded into one 28-day mean and read
+/// as physiology. It still never reaches the sleep STAGER (`OuraRespScale.forScoring`): that stream is
+/// read there as a ~1 Hz raw ADC waveform and a per-window rate is the wrong shape for a peak detector,
+/// however good the rate. `averageHrBpm` stays diagnostic-only: it must not join the beat-derived HR
+/// series at a different cadence and a different provenance.
 ///
 /// `mzci` / `dzci` keep the source's opaque names deliberately — we do not know what they measure, and
 /// inventing a friendlier name would assert an interpretation the evidence does not support.
@@ -438,10 +459,12 @@ public enum OuraEvent: Equatable, Sendable {
     /// `.activityInfo` was: a cited third-party unpack formula worth surfacing as real numbers instead
     /// of hex. Same gate (`allowTierB`), same discipline (never reaches `OuraStreamMapping`).
     case realStepsFields(OuraRealStepsFields)
-    /// A decoded `0x6A` sleep_period_info record (avg HR + a candidate breath rate). Still Tier-B (see
+    /// A decoded `0x6A` sleep_period_info record (avg HR + the ring's own breath rate). Still Tier-B (see
     /// `OuraSleepPeriodInfo` doc) - split out of the raw-bytes `.tierB` wrapper for the same reason
     /// `.activityInfo` was: a cited third-party layout worth surfacing as real numbers instead of hex.
-    /// Same gate (`allowTierB`), same discipline (never reaches `OuraStreamMapping`).
+    /// Same gate (`allowTierB`); its `breathsPerMin` — alone among the record's fields — is mapped to a
+    /// durable `respSample` row and, on a ring night, supplies `dailyMetric.respRateBpm` (see the type
+    /// doc). Every other field of the record stays diagnostic-only.
     case sleepPeriodInfo(OuraSleepPeriodInfo)
 
     /// True for Tier-B events, so a consumer can assert none leaked into a Tier-A-only sink.

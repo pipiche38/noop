@@ -1843,30 +1843,40 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 }
 
             case .sleepPeriodInfo(let info):
-                // INVESTIGATION ONLY (0x6A sleep_period_info, Tier B - third-party field NAMES
-                // [open_ring] over offsets our own §6.12 already had; see OuraSleepPeriodInfo). Logged
-                // with the DECODED values every time, like 0x50 MET rather than once-per-kind: this is
-                // the tag under active evaluation, its cadence is a modest ~5 min, and the question it
-                // has to answer - does `breath` MOVE with a real respiratory rate (#194) - can only be
-                // answered from the series, not from one sample. Never persisted, never scored
-                // (OuraStreamMapping drops .sleepPeriodInfo unconditionally), and specifically NOT
-                // surfaced as a respiratory rate: naming a field is not validating it.
+                // 0x6A sleep_period_info (Tier B - third-party field NAMES [open_ring] over offsets our
+                // own §6.12 already had; see OuraSleepPeriodInfo). Logged with the DECODED values every
+                // time, like 0x50 MET rather than once-per-kind: its cadence is a modest ~5 min and the
+                // series is what the respiration ledger is reconstructed from, sample by sample.
+                //
+                // The record's `breath` field is also PERSISTED, and on a ring night it is what
+                // `dailyMetric.respRateBpm` is scored from: anchored to its own ring-time and enqueued
+                // exactly like the sibling banked streams (.hrv/.temp/.spo2), so a night's ~5-min windows
+                // land where they were MEASURED and never at the drain-arrival moment. `OuraStreamMapping`
+                // maps that ONE field onto a `respSample` row in milli-bpm; everything else in this record
+                // stays here in the log. The logging is kept as well as the row: it covers records no
+                // anchor can place, and it carries the fields the store deliberately does not.
                 let periodWhen = driver.unixSeconds(forRingTimestamp: info.ringTimestamp)
                     .map { Self.cursorDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval($0))) }
                     ?? "no anchor yet"
                 log("Oura: sleep_period (Tier-B) [\(periodWhen)] hr=\(info.averageHrBpm) "
                     + "trend=\(info.hrTrend) breath=\(info.breathsPerMin) "
                     + "breathV=\(info.breathVariability) motion=\(info.motionCount) state=\(info.sleepState)")
-                // ...and ALSO into its own tiny sidecar, because the log line above is not durable enough to
-                // settle the question: three consecutive overnight captures lost it to an app restart after
-                // wake, and a morning-only bundle then cannot supply the NOOP half of the WHOOP-RR comparison.
-                // Anchored records only - an un-anchored one has no real time axis and re-arrives anchored on
-                // the next drain, and a respiration series at fabricated times is worse than no series.
-                if let utc = driver.unixSeconds(forRingTimestamp: info.ringTimestamp) {
-                    respDump?.record(ringTs: info.ringTimestamp, utc: utc, hr: info.averageHrBpm,
+                if let ts = driver.unixSeconds(forRingTimestamp: info.ringTimestamp) {
+                    // ...and ALSO into its own tiny sidecar, because the log line above is not durable enough to
+                    // settle the question: three consecutive overnight captures lost it to an app restart after
+                    // wake, and a morning-only bundle then cannot supply the NOOP half of the WHOOP-RR comparison.
+                    // Anchored records only - an un-anchored one has no real time axis and re-arrives anchored on
+                    // the next drain, and a respiration series at fabricated times is worse than no series. The
+                    // durable row goes out on the same anchor, so the sidecar and the store never disagree about
+                    // when a window was measured.
+                    respDump?.record(ringTs: info.ringTimestamp, utc: ts, hr: info.averageHrBpm,
                                      hrTrend: info.hrTrend, mzci: info.mzci, dzci: info.dzci,
                                      breath: info.breathsPerMin, breathV: info.breathVariability,
                                      motion: info.motionCount, state: info.sleepState, cv: info.cv)
+                    enqueue([e], ts: ts)
+                    noteStoredHistoryRingTime(info.ringTimestamp)
+                } else {
+                    pendingAnchorEvents.append((e, info.ringTimestamp))
                 }
 
             case .state(let s):

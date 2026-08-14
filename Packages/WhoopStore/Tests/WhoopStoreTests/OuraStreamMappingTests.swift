@@ -274,18 +274,71 @@ final class OuraStreamMappingTests: XCTestCase {
             // 0x7E/0x7F real_steps_features: decoded but Tier-B/unvalidated - must never mint a `steps`
             // row either, even from its leading candidate field (see OuraRealStepsFields).
             .realStepsFields(OuraRealStepsFields(tag: 0x7E, ringTimestamp: 100, fields: Array(0..<14))),
-            // 0x6A sleep_period_info: decoded but Tier-B/unvalidated. Two ways it could leak and both
-            // are barred - its `averageHrBpm` must not join the beat-derived HR series (different
-            // cadence, different provenance), and its `breathsPerMin` must not become a respiratory
-            // rate anywhere until it tracks a moving ground truth (see OuraSleepPeriodInfo).
+            // 0x6A sleep_period_info is NOT in this list any more: `breath` now mints a resp row (see
+            // testSleepPeriodInfoMapsBreathToRespirationAndNothingElse, which also pins the half that
+            // still holds — its `averageHrBpm` must never join the beat-derived HR series).
+        ], at: ts)
+        XCTAssertTrue(s.isEmpty, "Tier-B and diagnostic events must not produce any durable stream row")
+        XCTAssertTrue(s.steps.isEmpty, "activity/MET/real_steps must never fabricate a steps row")
+    }
+
+    // MARK: - 0x6A sleep_period_info → respiration instrumentation
+
+    /// `breath` becomes ONE `resp` row, in milli-bpm, at the record's own ts — and nothing else about
+    /// the record reaches a durable stream. The other fields are the whole reason the record was
+    /// dropped wholesale before: `averageHrBpm` at a ~5-min cadence would sit in the same series as the
+    /// beat-derived HR channel with no way to tell them apart afterwards.
+    func testSleepPeriodInfoMapsBreathToRespirationAndNothingElse() {
+        let s = OuraStreamMapping.streams(from: [
             .sleepPeriodInfo(OuraSleepPeriodInfo(ringTimestamp: 100, averageHrBpm: 53.0, hrTrend: -0.625,
                                                  mzci: 3.75, dzci: 1.75, breathsPerMin: 14.375,
                                                  breathVariability: 4.625, motionCount: 0, sleepState: 1,
                                                  cv: 0.25)),
         ], at: ts)
-        XCTAssertTrue(s.isEmpty, "Tier-B and diagnostic events must not produce any durable stream row")
-        XCTAssertTrue(s.steps.isEmpty, "activity/MET/real_steps must never fabricate a steps row")
+        XCTAssertEqual(s.resp.count, 1)
+        XCTAssertEqual(s.resp[0].ts, ts)
+        XCTAssertEqual(s.resp[0].raw, 14_375, "breath is stored in milli-bpm, exactly (14.375 → 14375)")
+        XCTAssertEqual(s.resp[0].unit, "milli_bpm")
         XCTAssertTrue(s.hr.isEmpty, "0x6A average_hr must never land in the beat-derived HR series")
+        XCTAssertTrue(s.rr.isEmpty)
+        XCTAssertTrue(s.events.isEmpty, "no event row: breath is a stream value, the rest stays in the log")
+        XCTAssertTrue(s.steps.isEmpty)
+        XCTAssertTrue(s.skinTemp.isEmpty)
+        XCTAssertTrue(s.spo2.isEmpty)
+    }
+
+    /// Every value the wire can express survives the round trip exactly — the point of the milli scale.
+    /// The field is a `u8 / 8`, so the whole alphabet is 0…31.875 bpm in 0.125 steps.
+    func testEveryWireBreathValueRoundTripsExactly() {
+        for byte in 0...255 {
+            let bpm = Double(byte) / 8.0
+            let s = OuraStreamMapping.streams(from: [
+                .sleepPeriodInfo(OuraSleepPeriodInfo(ringTimestamp: 100, averageHrBpm: 53.0, hrTrend: 0,
+                                                     mzci: 0, dzci: 0, breathsPerMin: bpm,
+                                                     breathVariability: 0, motionCount: 0, sleepState: 0,
+                                                     cv: 0)),
+            ], at: ts)
+            XCTAssertEqual(s.resp[0].raw, byte * 125, "raw must be the wire byte × 125, losslessly")
+            XCTAssertEqual(OuraRespScale.breathsPerMin(raw: s.resp[0].raw), bpm, accuracy: 1e-12)
+        }
+    }
+
+    /// Each record keeps its OWN anchored second, so a night's ~5-min windows land where they were
+    /// measured. The rows are keyed (deviceId, ts), so two records sharing a second would collapse to
+    /// one — the failure mode that cost 92 % of an overnight's SpO2 before #1070.
+    func testSleepPeriodInfoRecordsKeepTheirOwnTimestamps() {
+        let batches = [(ts, 14.375), (ts + 296, 14.5), (ts + 592, 15.0)]
+        var rows: [RespSample] = []
+        for (at, bpm) in batches {
+            rows += OuraStreamMapping.streams(from: [
+                .sleepPeriodInfo(OuraSleepPeriodInfo(ringTimestamp: 100, averageHrBpm: 53.0, hrTrend: 0,
+                                                     mzci: 0, dzci: 0, breathsPerMin: bpm,
+                                                     breathVariability: 0, motionCount: 0, sleepState: 0,
+                                                     cv: 0)),
+            ], at: at).resp
+        }
+        XCTAssertEqual(rows.map(\.ts), [ts, ts + 296, ts + 592])
+        XCTAssertEqual(rows.map(\.raw), [14_375, 14_500, 15_000])
     }
 
     // MARK: - Batching a record's events into one insert (#1072, root cause for #823)
