@@ -5,6 +5,13 @@ import Security
 import WhoopProtocol
 import WhoopStore
 import OuraProtocol
+// The live-HR suspend listens for the screen going dark, which is a UIKit notification on iOS and an
+// NSWorkspace one on macOS (see installScreenStateObservers).
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 /// EXPERIMENTAL, ISOLATED live-BLE source for the Oura ring (gen 3/4/5), driven by the clean-room
 /// `OuraProtocol.OuraDriver`.
@@ -922,6 +929,55 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private var reengageTimer: Timer?
     private let reengageInterval: TimeInterval = 15
 
+    // MARK: - Live-HR suspend while nobody is looking
+
+    /// When the screen went off (iOS: the app was backgrounded — locking the phone does that too; macOS:
+    /// the displays slept). nil whenever the user is present. Set on the FIRST such notification and left
+    /// alone by repeats, so the 15-minute clock measures the real absence, not the last notification.
+    private var screenOffAt: Date?
+
+    /// How long the screen stays off before the live-HR re-engage is suspended.
+    ///
+    /// WHY THIS EXISTS. Re-engaging every 15 s does not merely read the ring — it HOLDS it in daytime-HR
+    /// mode. Across 10 nights the correlation between our overnight re-engage count and the ring running
+    /// its own night suite is r = -0.91: on the nights NOOP re-engaged all night the ring's `0x43` log
+    /// shows `check_sleep -> not needed` every 300 s and `DHR_mode:3` throughout, so it never produced
+    /// SpO2, a hypnogram, or `0x6A` sleep_period. The one night our LINK BROKE is the night the ring
+    /// worked; 2026-08-13/14 (phone deliberately far, same 300 s build) restored the suite x23. Both of
+    /// those confounded the re-engage with link loss, which is what this change removes: the phone stays
+    /// close and connected, the history fetch stays at 300 s, and the ONLY variable is the re-engage.
+    ///
+    /// The 15-minute grace is not physiology, it is courtesy: a glance-and-pocket must not cost the user
+    /// their live HR for the rest of the evening, and the ring re-enters daytime mode within one tick of
+    /// the screen coming back. Overnight the grace is irrelevant — the screen is off for hours.
+    private let liveHRSuspendDelay: TimeInterval = 900
+
+    /// True once the screen has been off long enough that the ring should be left alone. Everything else
+    /// keys off this one predicate, so the suspend and the resume can never disagree about the rule.
+    private var liveHRSuspended: Bool {
+        Self.shouldSuspendLiveHR(screenOffAt: screenOffAt, now: Date(), delay: liveHRSuspendDelay)
+    }
+
+    /// Pure policy so it is testable without a `CBCentralManager` (this class owns one and cannot be built
+    /// in a test — the same reason `reconnectStep` is factored out).
+    ///
+    /// - Parameters:
+    ///   - screenOffAt: when the screen went dark, nil while the user is present.
+    ///   - now: the clock, injected so a test need not sleep for 15 minutes.
+    ///   - delay: the grace window.
+    nonisolated static func shouldSuspendLiveHR(screenOffAt: Date?, now: Date, delay: TimeInterval) -> Bool {
+        guard let off = screenOffAt else { return false }
+        return now.timeIntervalSince(off) >= delay
+    }
+
+    /// Logged-once latch, so the suspend prints a single line per screen-off rather than one per tick.
+    /// The strap log is generation-clipped (a 14 h night once clipped to 21 min), so an all-night periodic
+    /// line would evict the very evidence this change exists to capture.
+    private var loggedLiveHRSuspend = false
+
+    /// NotificationCenter tokens for the screen-state observers, removed on deinit.
+    private var screenStateObservers: [NSObjectProtocol] = []
+
     // MARK: - Init
 
     /// - Parameters:
@@ -992,6 +1048,75 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         // Strand (macOS desktop): no state-restoration identifier (iOS background feature).
         self.central = CBCentralManager(delegate: self, queue: nil)
         #endif
+        installScreenStateObservers()
+    }
+
+    deinit {
+        for token in screenStateObservers {
+            NotificationCenter.default.removeObserver(token)
+            #if os(macOS)
+            NSWorkspace.shared.notificationCenter.removeObserver(token)
+            #endif
+        }
+    }
+
+    // MARK: - Screen-state observers (drive the live-HR suspend)
+
+    /// Watch for the user going away and coming back. Only the PERSISTENT source listens: the discovery-only
+    /// wizard scanner (`feedsLive == false`) never streams live HR, so it has nothing to suspend.
+    ///
+    /// The two platforms ask different questions on purpose. On iOS, backgrounding IS the signal — locking
+    /// the phone backgrounds the app, and so does switching away, and both mean the same thing here (nobody
+    /// is looking at the live HR). On macOS, app-resign would be wrong: switching to another window leaves
+    /// NOOP visible on screen, so the Mac waits for the DISPLAYS to sleep instead. Same rule either way —
+    /// suspend when the screen the user would have to be looking at has gone dark.
+    private func installScreenStateObservers() {
+        guard feedsLive else { return }
+        #if os(iOS)
+        let center = NotificationCenter.default
+        let dark = UIApplication.didEnterBackgroundNotification
+        let light = UIApplication.didBecomeActiveNotification
+        #elseif os(macOS)
+        let center = NSWorkspace.shared.notificationCenter
+        let dark = NSWorkspace.screensDidSleepNotification
+        let light = NSWorkspace.screensDidWakeNotification
+        #endif
+        #if os(iOS) || os(macOS)
+        screenStateObservers.append(center.addObserver(forName: dark, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.handleScreenWentDark() }
+        })
+        screenStateObservers.append(center.addObserver(forName: light, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.handleScreenCameBack() }
+        })
+        #endif
+    }
+
+    /// Start (never restart) the absence clock. Repeat notifications must not push the deadline out, or a
+    /// phone that backgrounds twice would keep re-arming the grace and never actually suspend. Deliberately
+    /// silent: this fires every time the app is backgrounded, and the strap log is clip-budgeted — only the
+    /// suspend itself, which happens once a night, is worth a line.
+    private func handleScreenWentDark() {
+        guard screenOffAt == nil else { return }
+        screenOffAt = Date()
+    }
+
+    /// The user is back: clear the clock, and if we had actually suspended, put live HR back immediately
+    /// rather than making them watch a blank tile for up to 15 s.
+    private func handleScreenCameBack() {
+        let wasSuspended = loggedLiveHRSuspend
+        screenOffAt = nil
+        loggedLiveHRSuspend = false
+        guard wasSuspended else { return }
+        log("Oura: live-HR re-engage RESUMED - screen on")
+        guard reachedStreaming, driver != nil else { return }   // a reconnect will arm it at .streaming
+        // Restart the removal watchdog's grace window from NOW. `lastLivePulseAt` is hours old after a
+        // suspended night — not because the ring came off, but because we stopped asking — so the immediate
+        // re-engage below would otherwise trip the watchdog and flash "Off-wrist" on every morning unlock.
+        // Re-stamping (rather than clearing) keeps the detection alive: 40 s from now with still no beat is
+        // a genuine off-finger and still reports as one.
+        lastLivePulseAt = Date()
+        startReengageTimer()
+        reengageLiveHR()
     }
 
     // MARK: - Scanning
@@ -1738,8 +1863,16 @@ public final class OuraLiveSource: NSObject, ObservableObject {
 
     // MARK: - Re-engagement timer (daytime-HR auto-reverts ~20s)
 
+    /// Arm the re-engage tick — unless the screen has already been off past the grace window. That guard
+    /// is what makes the suspend survive a reconnect: an overnight drop that re-reaches `.streaming` at
+    /// 03:00 comes straight back through here, and without the guard it would silently restart the very
+    /// stream the suspend exists to stop (and then only stop again 15 minutes later, once per drop).
     private func startReengageTimer() {
         stopReengageTimer()
+        guard !liveHRSuspended else {
+            logLiveHRSuspendOnce()
+            return
+        }
         let t = Timer.scheduledTimer(withTimeInterval: reengageInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.reengageLiveHR() }
         }
@@ -1751,11 +1884,30 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         reengageTimer = nil
     }
 
+    /// The suspend announcement, printed once per screen-off rather than once per tick.
+    private func logLiveHRSuspendOnce() {
+        guard !loggedLiveHRSuspend else { return }
+        loggedLiveHRSuspend = true
+        log("Oura: live-HR re-engage SUSPENDED - screen off \(Int(liveHRSuspendDelay / 60)) min, leaving the "
+            + "ring free to run its own night suite (history fetch continues every \(Int(historyFetchInterval))s)")
+    }
+
     /// Re-send the live-HR enable+subscribe so the ~20 s auto-revert never silently stops the stream.
     /// Skipped while a history drain is in flight: the Oura app never runs live mode during a sync, and
     /// interleaving enable writes with the batch stream is off-model noise (live HR resumes on the next
     /// 15 s tick after the drain returns to `.streaming`).
     private func reengageLiveHR() {
+        // The tick is its own executioner, and deliberately so. A one-shot Timer armed for +15 min at
+        // screen-off is not trustworthy on iOS: a backgrounded app can be suspended and that timer may
+        // simply never fire, which would silently produce a night that looks like the old build. This
+        // tick, by contrast, is the one thing we have measured running all night (~3,900 commands), so
+        // hanging the suspend off it makes the suspend as reliable as the behaviour it stops. Cost is at
+        // most one extra tick of overshoot.
+        if liveHRSuspended {
+            stopReengageTimer()
+            logLiveHRSuspendOnce()
+            return
+        }
         guard let driver, reachedStreaming, driver.phase != .fetchingHistory else { return }
         write(driver.reengageLiveHRCommands())
         // Live-HR watchdog: if the stream has gone silent past the grace window while we were WORN, the
