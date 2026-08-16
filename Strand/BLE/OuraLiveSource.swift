@@ -960,6 +960,14 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// When the screen went off (iOS: the app was backgrounded — locking the phone does that too; macOS:
     /// the displays slept). nil whenever the user is present. Set on the FIRST such notification and left
     /// alone by repeats, so the 15-minute clock measures the real absence, not the last notification.
+    ///
+    /// ALSO SEEDED AT INIT (`seedScreenOffFromLaunchState`), which is not a nicety: the notification is an
+    /// EDGE, and a process launched *into* the background never posts it — it was never in the foreground
+    /// to leave it. That is exactly the overnight path this build runs, since #1215's CoreBluetooth
+    /// state-restoration identifier has iOS relaunch NOOP for BLE while the phone is locked. Left nil,
+    /// such a process reads "the user is present" forever and re-engages all night, which is
+    /// indistinguishable from the build that has no suspend at all — the 2026-08-15/16 night was voided
+    /// for exactly that reason.
     private var screenOffAt: Date?
 
     /// How long the screen stays off before the live-HR re-engage is suspended.
@@ -994,6 +1002,31 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     nonisolated static func shouldSuspendLiveHR(screenOffAt: Date?, now: Date, delay: TimeInterval) -> Bool {
         guard let off = screenOffAt else { return false }
         return now.timeIntervalSince(off) >= delay
+    }
+
+    /// What `screenOffAt` must be at construction time, given whether the screen is ALREADY dark.
+    ///
+    /// Factored out for the same reason as `shouldSuspendLiveHR`: the class owns a `CBCentralManager` and
+    /// cannot be built in a unit test, so the only way to pin the background-launch case is to test the
+    /// decision rather than the constructor.
+    ///
+    /// GRACE SEMANTICS, chosen deliberately. A background launch inherits an absence of UNKNOWN length —
+    /// the screen may have been dark for eight hours. Two readings were available: stamp `now`, giving
+    /// each launch a fresh 15-minute courtesy window; or stamp a time already past the grace, suspending
+    /// at the first tick. This returns the LATTER, because the courtesy window exists for a user who
+    /// glanced at live HR and pocketed the phone — and that user's app was in the FOREGROUND. A process
+    /// iOS woke for BLE has no such user, and the field evidence makes the difference decisive rather
+    /// than academic: the voided night's `report.txt` holds FOUR separate app sessions, so a fresh grace
+    /// per launch is a relaunch storm resetting the clock forever and never suspending at all.
+    ///
+    /// A background launch while the phone is merely unlocked-and-elsewhere costs nothing: opening NOOP
+    /// posts `didBecomeActive`, which clears this and re-engages immediately (`handleScreenCameBack`).
+    ///
+    /// - Returns: nil when the user is present (the ordinary foreground launch — `handleScreenWentDark`
+    ///   will start the clock honestly when they leave), else a stamp already `delay` old.
+    nonisolated static func seedScreenOffAt(screenIsDark: Bool, now: Date, delay: TimeInterval) -> Date? {
+        guard screenIsDark else { return nil }
+        return now.addingTimeInterval(-delay)
     }
 
     /// Logged-once latch, so the suspend prints a single line per screen-off rather than one per tick.
@@ -1073,6 +1106,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         self.central = CBCentralManager(delegate: self, queue: nil)
         #endif
         installScreenStateObservers()
+        seedScreenOffFromLaunchState()
     }
 
     deinit {
@@ -1112,6 +1146,41 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         screenStateObservers.append(center.addObserver(forName: light, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.handleScreenCameBack() }
         })
+        #endif
+    }
+
+    /// Close the hole the notifications leave: they are EDGES, and a process launched straight into the
+    /// background never posts the one we care about. So at construction, ASK the platform for the current
+    /// state instead of assuming the app is on screen.
+    ///
+    /// Only the PERSISTENT source seeds, matching `installScreenStateObservers` — the discovery-only wizard
+    /// scanner never streams live HR and has nothing to suspend. It is called AFTER the observers are
+    /// installed so there is no window in which a state change could be missed, and it writes `screenOffAt`
+    /// exactly once, before any notification can fire on the main actor; `handleScreenWentDark`'s
+    /// `screenOffAt == nil` guard then leaves the seeded value alone, which is what we want — a background
+    /// launch that is later backgrounded again must not restart the clock.
+    private func seedScreenOffFromLaunchState() {
+        guard feedsLive else { return }
+        screenOffAt = Self.seedScreenOffAt(screenIsDark: Self.screenIsDarkNow(),
+                                           now: Date(), delay: liveHRSuspendDelay)
+    }
+
+    /// Is the screen the user would have to be looking at dark RIGHT NOW? The platform question mirrors
+    /// `installScreenStateObservers` exactly, so the seed and the notifications can never disagree.
+    ///
+    /// iOS asks for `.background` specifically, not `!= .active`. A normal foreground cold launch builds
+    /// this source while the app is still `.inactive` and only then becomes active; reading that as "dark"
+    /// would seed a suspend on every ordinary launch. `.background` is the precise question — did this
+    /// process start without ever coming to the foreground — and a background launch reports it.
+    private static func screenIsDarkNow() -> Bool {
+        #if os(iOS)
+        return UIApplication.shared.applicationState == .background
+        #elseif os(macOS)
+        // NSWorkspace publishes screen sleep only as a notification, so the current state comes from
+        // CoreGraphics instead (AppKit re-exports it). Same question the screensDidSleep observer answers.
+        return CGDisplayIsAsleep(CGMainDisplayID()) != 0
+        #else
+        return false
         #endif
     }
 

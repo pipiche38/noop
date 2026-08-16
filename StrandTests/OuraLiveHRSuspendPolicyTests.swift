@@ -53,6 +53,57 @@ final class OuraLiveHRSuspendPolicyTests: XCTestCase {
         }
     }
 
+    // MARK: - Seeding the clock at construction (the background-launch case)
+
+    // The tests above pin the PREDICATE, and they passed on the build that produced a void night — because
+    // the defect was never in the predicate, it was in what feeds it. `screenOffAt` was written in exactly
+    // one place, from `UIApplication.didEnterBackgroundNotification`, and a process launched *into* the
+    // background never posts that notification: it was never in the foreground to leave it. That is the
+    // overnight path this build runs (#1215 has iOS relaunch NOOP for BLE while the phone is locked), so
+    // the suspend never armed and the night was indistinguishable from the build with no suspend at all.
+    //
+    // These pin the seed instead: constructed while the screen is dark ⇒ suspended, not merely eventually.
+
+    func testForegroundLaunchDoesNotSeedTheClock() {
+        // The ordinary launch: the user is looking at the app. Nothing to suspend, and the notification
+        // path will start the clock honestly when they leave.
+        XCTAssertNil(OuraLiveSource.seedScreenOffAt(screenIsDark: false, now: t0, delay: delay))
+    }
+
+    func testBackgroundLaunchSeedsTheClock() {
+        XCTAssertNotNil(OuraLiveSource.seedScreenOffAt(screenIsDark: true, now: t0, delay: delay),
+                        "a process launched into the background gets no didEnterBackground edge — if the "
+                        + "seed does not stand in for it, nothing ever writes screenOffAt")
+    }
+
+    func testBackgroundLaunchSuspendsImmediatelyRatherThanEarningAFreshGrace() {
+        // The grace is courtesy to a user who glanced at live HR and pocketed the phone — and that user's
+        // app was in the FOREGROUND. A process iOS woke for BLE has no such user, so it does not get a
+        // fresh 15 minutes. Decisive, not academic: the voided night ran FOUR app sessions, and a fresh
+        // grace per launch is a relaunch storm that resets the clock forever and never suspends.
+        let seeded = OuraLiveSource.seedScreenOffAt(screenIsDark: true, now: t0, delay: delay)
+        XCTAssertTrue(OuraLiveSource.shouldSuspendLiveHR(screenOffAt: seeded, now: t0, delay: delay),
+                      "a background launch must read as suspended at the very first check")
+    }
+
+    func testSeededBackgroundLaunchStaysSuspendedAllNight() {
+        // The end-to-end shape of the fix: seed at 22:00 launch, still suspended at every hour of the night.
+        let seeded = OuraLiveSource.seedScreenOffAt(screenIsDark: true, now: t0, delay: delay)
+        for hours in [0.0, 1, 4, 8] {
+            XCTAssertTrue(OuraLiveSource.shouldSuspendLiveHR(
+                screenOffAt: seeded, now: t0.addingTimeInterval(hours * 3600), delay: delay),
+                "\(hours)h after a background launch the re-engage must still be suspended")
+        }
+    }
+
+    func testTheOldBehaviourIsWhatTheSeedReplaces() {
+        // The regression this locks down, stated as the counterfactual: with screenOffAt left nil — which
+        // is what a background launch produced before the seed — no elapsed time ever suspends, so the
+        // 15 s re-engage runs all night and holds the ring in daytime-HR mode.
+        XCTAssertFalse(OuraLiveSource.shouldSuspendLiveHR(
+            screenOffAt: nil, now: t0.addingTimeInterval(8 * 3600), delay: delay))
+    }
+
     // MARK: - The stall threshold that applies while suspended
 
     /// While live HR is suspended, silence is the ring behaving correctly rather than a stalled channel, so
