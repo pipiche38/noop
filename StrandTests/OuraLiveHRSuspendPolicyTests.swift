@@ -15,7 +15,7 @@ import XCTest
 /// them.
 final class OuraLiveHRSuspendPolicyTests: XCTestCase {
 
-    private let delay: TimeInterval = 900   // the 15-minute grace
+    private let delay: TimeInterval = 300   // the 5-minute grace
     private let t0 = Date(timeIntervalSince1970: 1_760_000_000)
 
     // MARK: - Presence
@@ -28,10 +28,10 @@ final class OuraLiveHRSuspendPolicyTests: XCTestCase {
 
     func testDoesNotSuspendDuringTheGrace() {
         // A glance-and-pocket must not cost the user their live HR for the evening.
-        for elapsed in [0.0, 1, 60, 600, 899.9] {
+        for elapsed in [0.0, 1, 60, 200, 299.9] {
             XCTAssertFalse(OuraLiveSource.shouldSuspendLiveHR(
                 screenOffAt: t0, now: t0.addingTimeInterval(elapsed), delay: delay),
-                "\(elapsed)s of screen-off is still inside the 15-minute grace")
+                "\(elapsed)s of screen-off is still inside the 5-minute grace")
         }
     }
 
@@ -78,7 +78,7 @@ final class OuraLiveHRSuspendPolicyTests: XCTestCase {
     func testBackgroundLaunchSuspendsImmediatelyRatherThanEarningAFreshGrace() {
         // The grace is courtesy to a user who glanced at live HR and pocketed the phone — and that user's
         // app was in the FOREGROUND. A process iOS woke for BLE has no such user, so it does not get a
-        // fresh 15 minutes. Decisive, not academic: the voided night ran FOUR app sessions, and a fresh
+        // fresh 5 minutes. Decisive, not academic: the voided night ran FOUR app sessions, and a fresh
         // grace per launch is a relaunch storm that resets the clock forever and never suspends.
         let seeded = OuraLiveSource.seedScreenOffAt(screenIsDark: true, now: t0, delay: delay)
         XCTAssertTrue(OuraLiveSource.shouldSuspendLiveHR(screenOffAt: seeded, now: t0, delay: delay),
