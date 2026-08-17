@@ -1064,7 +1064,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
 
     /// When the screen went off (iOS: the app was backgrounded — locking the phone does that too; macOS:
     /// the displays slept). nil whenever the user is present. Set on the FIRST such notification and left
-    /// alone by repeats, so the 15-minute clock measures the real absence, not the last notification.
+    /// alone by repeats, so the grace clock measures the real absence, not the last notification.
     ///
     /// ALSO SEEDED AT INIT (`seedScreenOffFromLaunchState`), which is not a nicety: the notification is an
     /// EDGE, and a process launched *into* the background never posts it — it was never in the foreground
@@ -1086,10 +1086,16 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// those confounded the re-engage with link loss, which is what this change removes: the phone stays
     /// close and connected, the history fetch stays at 300 s, and the ONLY variable is the re-engage.
     ///
-    /// The 15-minute grace is not physiology, it is courtesy: a glance-and-pocket must not cost the user
+    /// The 5-minute grace is not physiology, it is courtesy: a glance-and-pocket must not cost the user
     /// their live HR for the rest of the evening, and the ring re-enters daytime mode within one tick of
     /// the screen coming back. Overnight the grace is irrelevant — the screen is off for hours.
-    private let liveHRSuspendDelay: TimeInterval = 900
+    ///
+    /// Was 900 s (15 min) through the 2026-08-16/17 retest, which validated the SEEDING mechanism but left
+    /// the grace itself unmeasured (the covered window only showed the suspend arming close to a 02:2x
+    /// restart, ~3-3.5 h after a plausible bedtime — consistent with either grace value on that data alone).
+    /// Shortened to narrow the unmeasured pre-suspend window on the next capture; 5 min still comfortably
+    /// exceeds a genuine glance-and-pocket.
+    private let liveHRSuspendDelay: TimeInterval = 300
 
     /// True once the screen has been off long enough that the ring should be left alone. Everything else
     /// keys off this one predicate, so the suspend and the resume can never disagree about the rule.
@@ -1102,7 +1108,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     ///
     /// - Parameters:
     ///   - screenOffAt: when the screen went dark, nil while the user is present.
-    ///   - now: the clock, injected so a test need not sleep for 15 minutes.
+    ///   - now: the clock, injected so a test need not sleep for the grace window.
     ///   - delay: the grace window.
     nonisolated static func shouldSuspendLiveHR(screenOffAt: Date?, now: Date, delay: TimeInterval) -> Bool {
         guard let off = screenOffAt else { return false }
@@ -1117,7 +1123,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     ///
     /// GRACE SEMANTICS, chosen deliberately. A background launch inherits an absence of UNKNOWN length —
     /// the screen may have been dark for eight hours. Two readings were available: stamp `now`, giving
-    /// each launch a fresh 15-minute courtesy window; or stamp a time already past the grace, suspending
+    /// each launch a fresh courtesy window; or stamp a time already past the grace, suspending
     /// at the first tick. This returns the LATTER, because the courtesy window exists for a user who
     /// glanced at live HR and pocketed the phone — and that user's app was in the FOREGROUND. A process
     /// iOS woke for BLE has no such user, and the field evidence makes the difference decisive rather
@@ -2187,7 +2193,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Arm the re-engage tick — unless the screen has already been off past the grace window. That guard
     /// is what makes the suspend survive a reconnect: an overnight drop that re-reaches `.streaming` at
     /// 03:00 comes straight back through here, and without the guard it would silently restart the very
-    /// stream the suspend exists to stop (and then only stop again 15 minutes later, once per drop).
+    /// stream the suspend exists to stop (and then only stop again a grace window later, once per drop).
     private func startReengageTimer() {
         stopReengageTimer()
         guard !liveHRSuspended else {
@@ -2218,7 +2224,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// interleaving enable writes with the batch stream is off-model noise (live HR resumes on the next
     /// 15 s tick after the drain returns to `.streaming`).
     private func reengageLiveHR() {
-        // The tick is its own executioner, and deliberately so. A one-shot Timer armed for +15 min at
+        // The tick is its own executioner, and deliberately so. A one-shot Timer armed for +grace at
         // screen-off is not trustworthy on iOS: a backgrounded app can be suspended and that timer may
         // simply never fire, which would silently produce a night that looks like the old build. This
         // tick, by contrast, is the one thing we have measured running all night (~3,900 commands), so
