@@ -1145,6 +1145,14 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// line would evict the very evidence this change exists to capture.
     private var loggedLiveHRSuspend = false
 
+    /// Logged-once latch (per suspend episode) for a live-HR push arriving AFTER we believe the ring is
+    /// suspended — the direct falsification signal for `disableLiveHRForSuspend`. 08-17/18 found the
+    /// PREVIOUS design (stop re-engaging, rely on the ring's daytime-HR mode auto-reverting ~20 s after
+    /// the last keep-alive per OURA_PROTOCOL.md s5.7) does not stop the stream: green 0x80 ran 1,700-3,600
+    /// per hour all night, including inside a genuinely stable, reconnect-free 3.5 h stretch, so nothing
+    /// had ever told the ring to stop. Reset alongside `loggedLiveHRSuspend` in `handleScreenCameBack`.
+    private var loggedUnexpectedLiveHRWhileSuspended = false
+
     /// NotificationCenter tokens for the screen-state observers, removed on deinit.
     private var screenStateObservers: [NSObjectProtocol] = []
 
@@ -1318,6 +1326,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         let wasSuspended = loggedLiveHRSuspend
         screenOffAt = nil
         loggedLiveHRSuspend = false
+        loggedUnexpectedLiveHRWhileSuspended = false
         guard wasSuspended else { return }
         log("Oura: live-HR re-engage RESUMED - screen on")
         guard reachedStreaming, driver != nil else { return }   // a reconnect will arm it at .streaming
@@ -1580,8 +1589,16 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 }
                 adoptPhase = .streaming   // re-auth after an install (or a normal auth) reached the stream: adoption complete
                 pendingInstallKey = nil   // an OK ack already persisted the key; nothing left in flight
-                if feedsLive { live.streamingLiveHR = true }   // drive the green menu-bar STREAMING pill (no WHOOP bond)
-                log("Oura: live-HR enabled - streaming HR / IBI")
+                // The driver's own auth-success path (OuraDriver.nextStep, .authCompleted(.success)) has no
+                // suspend awareness - it unconditionally re-runs the live-HR enable triplet on EVERY connect,
+                // including a reconnect during a suspended night (08-17/18: 25 reconnects, green never hit
+                // zero any hour). Only claim the stream is wanted, and only start the keep-alive, when the
+                // screen is actually on; startReengageTimer's own suspended guard sends the explicit disable
+                // that undoes what the triplet above just armed.
+                if !liveHRSuspended {
+                    if feedsLive { live.streamingLiveHR = true }   // drive the green menu-bar STREAMING pill (no WHOOP bond)
+                    log("Oura: live-HR enabled - streaming HR / IBI")
+                }
                 startReengageTimer()
                 startHistoryFetchTimer()
                 // §5.3 step 1 / open_oura sync recipe: hand the ring the current UTC BEFORE draining
@@ -1820,6 +1837,14 @@ public final class OuraLiveSource: NSObject, ObservableObject {
             switch e {
             case .hr(let hr):
                 guard hr.bpm >= 30, hr.bpm <= 220 else { continue }   // physiological gate
+                // Direct falsification signal for `disableLiveHRForSuspend`: a push arriving AFTER we
+                // believe the ring is suspended means the disable did not take (or the ring re-armed on its
+                // own). Logged once per suspend episode, not once per push, per the strap log's clip budget.
+                if liveHRSuspended, !loggedUnexpectedLiveHRWhileSuspended {
+                    loggedUnexpectedLiveHRWhileSuspended = true
+                    log("Oura: live-HR push arrived while SUSPENDED (\(hr.bpm) bpm) - dhr_disable did not "
+                        + "stop the stream")
+                }
                 // Drop the first (settling) live-HR sample of the session — it is frequently an artifact.
                 // The value is never shown or persisted; the NEXT sample becomes the first real reading.
                 if !droppedFirstLiveHR {
@@ -2198,6 +2223,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         stopReengageTimer()
         guard !liveHRSuspended else {
             logLiveHRSuspendOnce()
+            disableLiveHRForSuspend()
             return
         }
         let t = Timer.scheduledTimer(withTimeInterval: reengageInterval, repeats: true) { [weak self] _ in
@@ -2219,6 +2245,23 @@ public final class OuraLiveSource: NSObject, ObservableObject {
             + "ring free to run its own night suite (history fetch continues every \(Int(historyFetchInterval))s)")
     }
 
+    /// Actively turn daytime-HR mode off rather than merely declining to re-arm it. `reengageLiveHR`'s own
+    /// doc cites a ~20 s auto-revert (OURA_PROTOCOL.md s5.7) as the reason "just stop poking it" should be
+    /// enough - 08-17/18 falsified that for THIS build: green 0x80 never collapsed, any hour, including a
+    /// stable 3.5 h stretch with zero reconnects, so nothing was ever telling the ring to stop. `dhr_disable`
+    /// (`OuraCommands.liveHRDisable`, `Commands.swift`) existed but was called from nowhere before this.
+    /// Its ACK shares subop 0x23 with the enable triplet's step-2 ACK, so `handleSecureFrame` routes it to
+    /// the same `.enableAck` case; `OuraDriver.nextStep(after: .enableAckReceived)` no-ops outside
+    /// `.enablingLiveHR`, so sending it while the driver is idle/streaming is a harmless read-only-shaped
+    /// write, not a state-machine hazard. Only fires when the driver actually reached `.streaming` this
+    /// session; there is nothing to disable before then. NOT yet hardware-validated - the next capture
+    /// needs to show green 0x80 actually collapse after SUSPENDED fires, not just that we sent the write.
+    private func disableLiveHRForSuspend() {
+        guard let driver, driver.phase == .streaming else { return }
+        write([OuraCommands.liveHRDisable()])
+        if feedsLive { live.streamingLiveHR = false }
+    }
+
     /// Re-send the live-HR enable+subscribe so the ~20 s auto-revert never silently stops the stream.
     /// Skipped while a history drain is in flight: the Oura app never runs live mode during a sync, and
     /// interleaving enable writes with the batch stream is off-model noise (live HR resumes on the next
@@ -2233,6 +2276,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         if liveHRSuspended {
             stopReengageTimer()
             logLiveHRSuspendOnce()
+            disableLiveHRForSuspend()
             return
         }
         guard let driver, reachedStreaming, driver.phase != .fetchingHistory else { return }
