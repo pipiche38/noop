@@ -1045,12 +1045,16 @@ object IntelligenceEngine {
         mergeNightlyIntoHistory(histHrvByDay, nightlyHrvByDay)
         mergeNightlyIntoHistory(histRhrByDay, nightlyRhrByDay)
         mergeNightlyIntoHistory(histRespByDay, nightlyRespByDay)
-        // Which SOURCE measured each night's respiration, assembled on the SAME imported-wins-per-day rule
-        // as the values themselves (imported ids first, then only the days the import does not cover).
-        // This is the input `Baselines.deviceEraEpoch` (#459) needs for the resp fold below. Mirrors Swift.
+        // Which SOURCE measured each night's respiration — the input `Baselines.deviceEraEpoch` (#459)
+        // needs for the resp fold below. `resolvedScoreOwnerByDay` (THIS PASS's freshly resolved per-day
+        // owner, before any re-homing) must win over `hist`, not just fill its gaps: `hist` is every day
+        // already stored under `importedDeviceId` by construction (that is where a scored day is written),
+        // so filling from `hist` first would tag an Oura-owned day "whoop" on every re-score after its
+        // first — the exact "brand is lost once a wearable day is re-homed" trap `deviceEraEpoch`'s own
+        // contract warns against. `hist` still fills days outside this pass's scan window. Mirrors Swift.
         val respSourceByDay = LinkedHashMap<String, String>()
-        for (d in hist) respSourceByDay[d.day] = importedDeviceId
-        for ((day, owner) in resolvedScoreOwnerByDay) respSourceByDay.putIfAbsent(day, owner)
+        for ((day, owner) in resolvedScoreOwnerByDay) respSourceByDay[day] = owner
+        for (d in hist) respSourceByDay.putIfAbsent(d.day, importedDeviceId)
         // Sort once so the HRV values + their "yyyy-MM-dd" day keys stay parallel (same order/length) for
         // the recalibration-aware foldHistory below.
         val hrvSorted = histHrvByDay.entries.sortedBy { it.key }

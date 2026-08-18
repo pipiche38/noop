@@ -1293,19 +1293,29 @@ final class IntelligenceEngine: ObservableObject {
         Self.mergeNightlyIntoHistory(&histHrvByDay, nightlyHrvByDay)
         Self.mergeNightlyIntoHistory(&histRhrByDay, nightlyRhrByDay)
         Self.mergeNightlyIntoHistory(&histRespByDay, nightlyRespByDay)
-        // Which SOURCE measured each night's respiration, assembled on the SAME imported-wins-per-day rule
-        // as the values themselves (write the imported ids first, then fill only the days the import does
-        // not cover). This is the input `Baselines.deviceEraEpoch` (#459) needs, and respiration is now a
-        // metric that requires it: a WHOOP export reports its OWN measured rate (~16.1 for this history)
-        // while an Oura ring reports the rate its firmware measured (~14.6), and NOOP's own RSA estimate
-        // is a third method again. Pooling them in one 28-day baseline turns a strap SWITCH into a ~3σ
-        // illness-ward step against a ~0.52 bpm spread — a device artifact scored as physiology, which is
-        // exactly the failure #459 named for HRV (Oura RMSSD ~120–155 ms vs WHOOP ~72–112 ms).
+        // Which SOURCE measured each night's respiration — the input `Baselines.deviceEraEpoch` (#459)
+        // needs, and respiration is now a metric that requires it: a WHOOP export reports its OWN measured
+        // rate (~16.1 for this history) while an Oura ring reports the rate its firmware measured (~14.6),
+        // and NOOP's own RSA estimate is a third method again. Pooling them in one 28-day baseline turns a
+        // strap SWITCH into a ~3σ illness-ward step against a ~0.52 bpm spread — a device artifact scored
+        // as physiology, which is exactly the failure #459 named for HRV (Oura RMSSD ~120-155 ms vs WHOOP
+        // ~72-112 ms).
+        //
+        // `resolvedScoreOwnerByDay` — THIS PASS's freshly resolved per-day owner (`resolveDayOwner`,
+        // straight off `DayOwnerResolver`, BEFORE any re-homing) — must win over `hist`, not just fill its
+        // gaps. `hist` is `store.dailyMetrics(deviceId: deviceId, ...)`: every row in it is already stored
+        // under THIS device's own id, by construction, because that is where `analyzeRecent` writes every
+        // day's result once scored — an Oura-owned day scored on a PRIOR run is filed there exactly the
+        // same as a WHOOP-owned one. Filling from `hist` first (the value-priority order, correct for
+        // `histRespByDay` because an import legitimately outranks a computed value) would tag that day
+        // "whoop" for every re-score after its first, which is precisely the "brand is lost once a
+        // wearable day is re-homed under the computed WHOOP id" trap `deviceEraEpoch`'s own contract warns
+        // against — it would neuter era-scoping for any day already scored once, i.e. almost all of them in
+        // steady state. `hist` still fills the days OUTSIDE this pass's scan window (older than `maxDays`),
+        // where no fresher source is available and the pre-existing storage id is the best guess.
         var respSourceByDay: [String: String] = [:]
-        for d in hist { respSourceByDay[d.day] = deviceId }
-        for (day, owner) in resolvedScoreOwnerByDay where respSourceByDay[day] == nil {
-            respSourceByDay[day] = owner
-        }
+        for (day, owner) in resolvedScoreOwnerByDay { respSourceByDay[day] = owner }
+        for d in hist where respSourceByDay[d.day] == nil { respSourceByDay[d.day] = deviceId }
         // rhr/resp/skin honour the Charge-wide recalibration epoch (noop.recoveryBaselineEpoch); 0 = no-op,
         // so this is byte-identical to the plain fold until the user taps Recalibrate, at which point the
         // whole Charge build-up (HRV + resting HR + resp + skin) re-anchors together.
