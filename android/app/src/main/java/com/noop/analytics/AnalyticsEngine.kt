@@ -1111,6 +1111,19 @@ object AnalyticsEngine {
      * sample dropped, so an absent skin temp is self-explaining. [wornNightlySkinTempC] is a thin wrapper
      * over this, so the two can never disagree. Pure + deterministic. Mirrors Swift `skinTempFunnel`. (#752)
      */
+    /**
+     * #1467: how far apart (seconds) a valid HR sample may sit from a skin-temp sample and still mark
+     * it "worn", when the caller opts in via [wornToleranceSec] > 0. Ground-truthed against a 7-night
+     * Oura gap: exact-timestamp co-occurrence (tolerance 0) landed every one of those nights just under
+     * [MIN_SKIN_TEMP_SAMPLES_INLINE] (155-296 kept, floor 300) despite 269-675 raw skin-temp samples
+     * and 3,900-14,600 valid HR samples each night — the ring's HR and skin-temp channels are
+     * independently clocked, unlike a WHOOP strap's single co-sampled per-second stream, so only
+     * ~40-55% of timestamps coincide exactly by chance. A ±2 s window alone recovered every real
+     * (non-fragment) night comfortably past the floor (622-635 kept); this default carries margin. See
+     * worklog/BOARD.md queue 11b and worklog/analysis/2026-08-19-1745-oura-app-skintemp-groundtruth-check.txt.
+     */
+    const val DEFAULT_OURA_WORN_TOLERANCE_SEC = 5L
+
     fun skinTempFunnel(
         sessions: List<DetectedSleep>,
         hr: List<HrSample>,
