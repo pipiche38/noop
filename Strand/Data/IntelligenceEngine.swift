@@ -293,6 +293,29 @@ final class IntelligenceEngine: ObservableObject {
             + "(floor = WHOOP-style lowest-sustained = NOOP RHR; mean = sleeping-HR-app number)"
     }
 
+    /// Queue 11b diagnostic: the skin-temp baseline's fold state at the end of THIS `analyzeRecent`
+    /// pass, one line per re-score (not per night — `foldHistory` returns a single running state, not
+    /// a per-day series). Answers the open question directly from the log instead of guessing: if
+    /// `nValid` is climbing toward `minNightsSeed` it's genuinely still warming up; if it's stuck at 0
+    /// despite many nights of wear, the fold isn't being fed Oura nights at all (a device-id/era-scoping
+    /// gap, the same family of bug `deviceEraEpoch` fixed for respiration). Temporary — remove once
+    /// queue 11b is resolved one way or the other.
+    nonisolated static func skinTempBaselineLogLine(nValid: Int, status: BaselineStatus,
+                                                     nightsSinceUpdate: Int, minNightsSeed: Int) -> String {
+        "skinTempBaseline nValid=\(nValid) status=\(status.rawValue) nightsSinceUpdate=\(nightsSinceUpdate) "
+            + "minNightsSeed=\(minNightsSeed)"
+    }
+
+    /// Queue 11b diagnostic, per-night companion to `skinTempBaselineLogLine`: the first pass found the
+    /// baseline itself usable (nValid already past minNightsSeed) but stalled `nightsSinceUpdate` nights
+    /// back, which only tells us THAT recent nights aren't feeding it, not WHICH nights or why. This
+    /// names the per-night wear-gated mean (`res.nightlySkinTempC`) so a run of "nil" pinpoints exactly
+    /// when the per-night feed broke. Byte-identical style to `respRateLogLine`. Temporary — remove once
+    /// queue 11b is resolved.
+    nonisolated static func skinTempNightlyLogLine(day: String, tempC: Double?) -> String {
+        "skin day=\(day) tempC=\(tempC.map { String(format: "%.2f", $0) } ?? "nil")"
+    }
+
     /// #1244: one line for a day that CLEARED the ≥200-HR gate yet detected NO in-bed session, so the
     /// dashboard shows "HR tracked but no sleep". Today only the summary `sleep day=… totalSleepMin=nil`
     /// rides the log — with no clue WHY, since every other night trace (`rhr`/`rrsample`/`hrv diag`) only
@@ -1611,6 +1634,7 @@ final class IntelligenceEngine: ObservableObject {
             }
             if let line = scan.rhrLine { diagnosticSink?(line, nil) }
             if let line = scan.respLine { diagnosticSink?(line, nil) }
+            diagnosticSink?(Self.skinTempNightlyLogLine(day: res.daily.day, tempC: res.nightlySkinTempC), nil)
             // Sleep & Rest test mode (E5): replay this day's gate-trace + Rest lines tagged `.sleep` so they
             // land under the profile tag in the export. Empty unless the mode is active.
             for line in scan.sleepTrace { diagnosticSink?(line, .sleep) }
@@ -1720,6 +1744,11 @@ final class IntelligenceEngine: ObservableObject {
                                                     tail: 14)
             for line in traced.lines { diagnosticSink?(line, .recovery) }
         }
+        // Queue 11b: log the fold state every pass until the "–" Skin Temp card is explained (see
+        // `skinTempBaselineLogLine`). Already on the main actor here, so no pure/replay split needed.
+        diagnosticSink?(Self.skinTempBaselineLogLine(nValid: skinFold.nValid, status: skinFold.status,
+                                                       nightsSinceUpdate: skinFold.nightsSinceUpdate,
+                                                       minNightsSeed: Baselines.minNightsSeed), nil)
         let baselines2 = AnalyticsEngine.ProfileBaselines(
             // HRV honours noop.hrvBaselineEpoch; rhr/resp/skin honour noop.recoveryBaselineEpoch via their
             // parallel day keys, so the manual Recalibrate restarts the whole Charge build-up together.
