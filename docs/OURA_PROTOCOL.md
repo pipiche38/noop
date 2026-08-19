@@ -321,6 +321,23 @@ Gen 5 example `0912 020100 020103 010001 090329 665544332211`. [open_oura-r5]
    - **How to test it:** one session with `28 01 00` suppressed. If NOOP still receives the full backlog,
      reading (A) is supported and the command can be dropped — which would also un-block the §6.5
      same-night comparison. If recent records go missing, reading (B) is right and it must stay.
+   - **⚠️ CORRECTION 2026-08-19 — "consumes it" is too strong, at least for sleep-summary-level data.**
+     A user re-paired the ring to the official Oura app (procedure: OS-level Bluetooth "Forget This
+     Device" on the phone, then pair from the Oura app — **not** a ring-side factory reset, so the
+     ring's own bond/auth-key state most likely persisted across the switch) and the Oura app
+     successfully backfilled full sleep architecture, SpO2, HR and HRV for two nights NOOP had already
+     drained days earlier (2026-08-13/14 and 08-18/19). This directly contradicts the "the other gets
+     nothing for those days" claim above, at least for this reproduction path. **What this does and
+     does NOT settle:** it does not distinguish reading (A) from (B) above — we don't know whether the
+     Oura app pulled the same raw event stream NOOP already drained, or whether Oura's app/cloud
+     computes sleep summaries from a different raw channel (e.g. continuous PPG/motion) that survives
+     `28 01 00` regardless of which client asked for the discrete event history. It also doesn't confirm
+     behavior after a true ring-side reset, only after an OS-level unpair. Do not treat this as
+     permission to drop `28 01 00` on theory — the underlying mechanism is still unverified, only the
+     downstream "other client gets nothing" consequence is now known to be false in at least one
+     case. See the parallel correction in §6.5 and
+     `worklog/analysis/2026-08-19-1730-oura-app-groundtruth-first-paired-comparison.txt` for the
+     comparison data this produced.
 3. Send `0x10` with the stored cursor, `max=255`, flags `FF FF FF FF` (open_oura's `flags=-1`).
 4. Collect the batch until the stream goes QUIET (~1.5 s of no records — open_oura's `transact()`
    window). The `0x11` summary is NOT an end-of-batch marker (§5.2); never re-request mid-stream.
