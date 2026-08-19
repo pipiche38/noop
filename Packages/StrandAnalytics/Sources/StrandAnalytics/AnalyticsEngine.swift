@@ -1296,10 +1296,6 @@ public enum AnalyticsEngine {
         }
     }
 
-    /// Read-only skin-temp funnel for one night (#752). Re-runs the SAME wear/window/range gates
-    /// `wornNightlySkinTempC` uses (and produces the IDENTICAL mean), additionally counting where each
-    /// sample dropped, so an absent skin temp is self-explaining. The public `wornNightlySkinTempC` is a
-    /// thin wrapper over this, so the two can never disagree. Pure + deterministic. (#752)
     /// #1467: how far apart (seconds) a valid HR sample may sit from a skin-temp sample and still mark it
     /// "worn", when the caller opts in via `wornToleranceSec` > 0. Ground-truthed against a 7-night Oura
     /// gap: exact-timestamp co-occurrence (tolerance 0) landed every one of those nights just under
@@ -1311,6 +1307,10 @@ public enum AnalyticsEngine {
     /// `worklog/analysis/2026-08-19-1745-oura-app-skintemp-groundtruth-check.txt`.
     public static let defaultOuraWornToleranceSec = 5
 
+    /// Read-only skin-temp funnel for one night (#752). Re-runs the SAME wear/window/range gates
+    /// `wornNightlySkinTempC` uses (and produces the IDENTICAL mean), additionally counting where each
+    /// sample dropped, so an absent skin temp is self-explaining. The public `wornNightlySkinTempC` is a
+    /// thin wrapper over this, so the two can never disagree. Pure + deterministic. (#752)
     public static func skinTempFunnel(_ sessions: [SleepSession],
                                       hr: [HRSample],
                                       skinTemp: [SkinTempSample],

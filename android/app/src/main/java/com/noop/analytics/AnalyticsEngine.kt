@@ -1091,12 +1091,6 @@ object AnalyticsEngine {
     }
 
     /**
-     * Read-only skin-temp funnel for one night (#752). Re-runs the SAME wear/window/range gates
-     * [wornNightlySkinTempC] uses (and produces the IDENTICAL mean), additionally counting where each
-     * sample dropped, so an absent skin temp is self-explaining. [wornNightlySkinTempC] is a thin wrapper
-     * over this, so the two can never disagree. Pure + deterministic. Mirrors Swift `skinTempFunnel`. (#752)
-     */
-    /**
      * #1467: how far apart (seconds) a valid HR sample may sit from a skin-temp sample and still mark
      * it "worn", when the caller opts in via [wornToleranceSec] > 0. Ground-truthed against a 7-night
      * Oura gap: exact-timestamp co-occurrence (tolerance 0) landed every one of those nights just under
@@ -1109,6 +1103,12 @@ object AnalyticsEngine {
      */
     const val DEFAULT_OURA_WORN_TOLERANCE_SEC = 5L
 
+    /**
+     * Read-only skin-temp funnel for one night (#752). Re-runs the SAME wear/window/range gates
+     * [wornNightlySkinTempC] uses (and produces the IDENTICAL mean), additionally counting where each
+     * sample dropped, so an absent skin temp is self-explaining. [wornNightlySkinTempC] is a thin wrapper
+     * over this, so the two can never disagree. Pure + deterministic. Mirrors Swift `skinTempFunnel`. (#752)
+     */
     fun skinTempFunnel(
         sessions: List<DetectedSleep>,
         hr: List<HrSample>,
