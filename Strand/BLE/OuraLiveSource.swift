@@ -1996,17 +1996,30 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Actively turn daytime-HR mode off rather than merely declining to re-arm it. `reengageLiveHR`'s own
     /// doc cites a ~20 s auto-revert (OURA_PROTOCOL.md s5.7) as the reason "just stop poking it" should be
     /// enough - 08-17/18 falsified that for THIS build: green 0x80 never collapsed, any hour, including a
-    /// stable 3.5 h stretch with zero reconnects, so nothing was ever telling the ring to stop. `dhr_disable`
-    /// (`OuraCommands.liveHRDisable`, `Commands.swift`) existed but was called from nowhere before this.
-    /// Its ACK shares subop 0x23 with the enable triplet's step-2 ACK, so `handleSecureFrame` routes it to
-    /// the same `.enableAck` case; `OuraDriver.nextStep(after: .enableAckReceived)` no-ops outside
-    /// `.enablingLiveHR`, so sending it while the driver is idle/streaming is a harmless read-only-shaped
-    /// write, not a state-machine hazard. Only fires when the driver actually reached `.streaming` this
-    /// session; there is nothing to disable before then. NOT yet hardware-validated - the next capture
-    /// needs to show green 0x80 actually collapse after SUSPENDED fires, not just that we sent the write.
+    /// stable 3.5 h stretch with zero reconnects, so nothing was ever telling the ring to stop. This
+    /// function was added to send an explicit disable, but 08-18/19's hardware run falsified THAT too:
+    /// green ran in 11 of 12 hours, just at ~3.3x lower volume, including a mid-night resumption with no
+    /// reconnect logged in between - not the connect-time-only leak the first cut assumed.
+    ///
+    /// Root cause found by re-reading OURA_PROTOCOL.md s7.2's APK-sourced feature-mode table:
+    /// `liveHRDisable()` was writing mode byte **0x01**, which that table defines as "automatic", NOT
+    /// "off" (0x00). s7.4's own worked example even shows mode=1 read back while daytime-HR is actively
+    /// streaming. So the old write downgraded the ring from forced-always-on (`connected_live`, mode 3)
+    /// to its own adaptive/motion-triggered sampling mode, not to off - which matches the observed
+    /// pattern (reduced but non-zero volume, scattered through the night, no reconnect needed to resume)
+    /// far better than a keep-alive-wearing-off theory. Fixed at the source (`Commands.swift`): the mode
+    /// byte is now 0x00. Also added `liveHRUnsubscribe()` alongside it: the enable triplet's step 3 left
+    /// the ring subscribed at "latest" and nothing ever unsubscribed, so a live channel stayed open
+    /// independent of the mode byte. Both ACKs share subop with an enable-triplet step (0x23 / 0x27), so
+    /// `handleSecureFrame` routes them to `.enableAck`; `OuraDriver.nextStep(after: .enableAckReceived)`
+    /// no-ops outside `.enablingLiveHR`, so sending them while the driver is idle/streaming is a harmless
+    /// read-only-shaped write, not a state-machine hazard. Only fires when the driver actually reached
+    /// `.streaming` this session; there is nothing to disable before then. NOT yet hardware-validated -
+    /// the next capture needs to show green 0x80 actually collapse after SUSPENDED fires, this time with
+    /// the corrected mode byte and the unsubscribe write both in place.
     private func disableLiveHRForSuspend() {
         guard let driver, driver.phase == .streaming else { return }
-        write([OuraCommands.liveHRDisable()])
+        write([OuraCommands.liveHRDisable(), OuraCommands.liveHRUnsubscribe()])
         if feedsLive { live.streamingLiveHR = false }
     }
 
