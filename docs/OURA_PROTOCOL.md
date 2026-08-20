@@ -650,35 +650,40 @@ like its sibling banked streams (`.hrv`/`.temp`/`.spo2`/`.sleepPhase`) — the f
   SpO2 for these exact 3 dates (08-04/05/06) — the first comparator close enough in both subject and time
   to actually attempt decomposing offset from clamp, rather than fitting to an aggregate.
 
-#### 6.5.0.2 First same-night paired comparison (2026-08-19, same wearer's WHOOP export)
+#### 6.5.0.2 Same-night paired comparison, now n=4 (2026-08-19/20 export, same wearer's WHOOP export)
 
 - The wearer's WHOOP export (`physiological_cycles.csv`, `Niveau d'oxygène %`) has cycle-start
-  timestamps within ~2 minutes of the three Oura sleep sessions above — the first same-person,
+  timestamps within ~2 minutes of the Oura sleep sessions above — the first same-person,
   same-night SpO2 comparator this project has had (the Cloud reference above has zero overlapping days
-  with any NOOP capture; this one is the same three nights exactly).
+  with any NOOP capture).
 
   | night | Oura raw mean | Oura ceiling@100 | **WHOOP (truth)** | raw Δ | ceiling Δ |
   |---|---|---|---|---|---|
   | 08-04 | 99.12 | 98.18 | **97.14** | +1.98 | +1.04 |
   | 08-05 | 98.12 | 97.90 | **97.45** | +0.67 | +0.45 |
   | 08-06 | 97.92 | 97.63 | **96.88** | +1.04 | +0.75 |
-  | MAE | | | | **1.23** | **0.75** |
+  | 08-19/20 | 98.33 | 97.76 | **96.65** | +1.68 | +1.11 |
+  | MAE | | | | **1.34** | **0.84** |
 
-  (WHOOP's 30-day rolling score reads 96 % — lower than any of these three nights individually; the
+  (WHOOP's 30-day rolling score reads 96 % — lower than any of these four nights individually; the
   30-day figure is not a valid stand-in for a same-night comparison, it pulls in other nights.)
 
-- **The offset −0.32 + clamp[85,100] fit above (§6.5.0.1, derived from the unrelated 922-night Cloud
-  aggregate) scores MAE 0.49 against this real paired WHOOP data — matching a same-night best-fit offset
-  (−1.23, fit directly to these 3 WHOOP nights, MAE 0.50).** Two corrections derived from completely
-  non-overlapping references converge on the same accuracy — evidence the §6.5.0.1 fit is in the right
-  neighborhood, not a coincidence of fitting to the wrong reference.
-- **Still not a clean single-number fit.** Even the same-night best-fit offset (exact on the 3-night
-  average, by construction) leaves per-night residuals of −0.6 to +0.75 pts — more than half the size of
-  the correction itself. Consistent with the documented 7.6–52 % overshoot swing: a flat additive offset
-  has a real accuracy floor here, it does not eliminate the error.
-- **n = 3 nights is still the binding limit.** This is the first real paired decomposition NOOP has had
-  for this signal, not a validated calibration. More nights (ideally spanning the known overshoot swing)
-  are needed before any offset is defensible enough to write to `spo2Pct`.
+- **A 4th night moved the MAE the wrong way for both corrections** (raw 1.23→1.34, ceiling 0.75→0.84).
+  08-19/20 is an above-average-overshoot night on both metrics — a new worst on ceiling Δ (+1.11 vs the
+  prior worst 08-04's +1.04), second-worst on raw Δ (+1.68 vs 08-04's +1.98). This is the documented
+  7.6–52 % night-to-night overshoot swing showing up directly in paired data, not a contradiction of the
+  earlier 3-night read. Full derivation: `worklog/analysis/2026-08-20-2216-spo2-night4-whoop-paired.txt`.
+- The offset −0.32 + clamp[85,100] fit (§6.5.0.1, derived from the unrelated 922-night Cloud aggregate)
+  was **not re-scored against night 4**: it needs per-sample data (clamp applies before averaging), and
+  the staging DB's `spo2Sample` rows for this night were no longer present when this pass ran (DB gone
+  stale — see the analysis file). The n=3 figures for that fit (MAE 0.49, matching a same-night best-fit
+  offset of −1.23 at MAE 0.50) stand as last measured, not re-verified at n=4.
+- **Still not a clean single-number fit, if anything less so now.** The 3-night same-night best-fit
+  offset already left per-night residuals of −0.6 to +0.75 pts; adding a 4th night that's an outlier in
+  the worse direction only reinforces that a flat additive offset has a real accuracy floor here.
+- **n = 4 nights is still the binding limit.** Not a validated calibration. More nights (ideally
+  spanning the known overshoot swing in both directions) are needed before any offset is defensible
+  enough to write to `spo2Pct`.
 
 ### 6.5.1 SpO2 ratio-of-ratios - `0x8b` `spo2_r_pi_event` — **NOT OBSERVED in NOOP captures**
 - Carries the raw **ratio-of-ratios `r`** plus a **perfusion index `pi`** (quality parameter). This is the
