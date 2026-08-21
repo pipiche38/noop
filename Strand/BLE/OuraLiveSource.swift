@@ -1837,13 +1837,26 @@ public final class OuraLiveSource: NSObject, ObservableObject {
             switch e {
             case .hr(let hr):
                 guard hr.bpm >= 30, hr.bpm <= 220 else { continue }   // physiological gate
-                // Direct falsification signal for `disableLiveHRForSuspend`: a push arriving AFTER we
-                // believe the ring is suspended means the disable did not take (or the ring re-armed on its
-                // own). Logged once per suspend episode, not once per push, per the strap log's clip budget.
-                if liveHRSuspended, !loggedUnexpectedLiveHRWhileSuspended {
-                    loggedUnexpectedLiveHRWhileSuspended = true
-                    log("Oura: live-HR push arrived while SUSPENDED (\(hr.bpm) bpm) - dhr_disable did not "
-                        + "stop the stream")
+                // Direct falsification signal for `disableLiveHRForSuspend`, AND the self-heal for the one
+                // gap 2026-08-21's hardware run found: enforcement is polled on `reengageLiveHR`'s 15 s
+                // tick (deliberately, see that function's doc — a one-shot timer at grace-expiry is not
+                // trustworthy backgrounded on iOS), so there is an up-to-15 s window right as the grace
+                // expires where `liveHRSuspended` has flipped true but the tick that would send
+                // `dhr_disable` hasn't landed yet. A push arriving in exactly that window used to just get
+                // logged and let through (16/16 OTHER reconnects that same night were clean — this is the
+                // one case the tick-based enforcement can't beat). `startReengageTimer()` runs the exact
+                // stop-and-disable transition `reengageLiveHR()` would eventually run anyway; calling it
+                // here just runs it now instead of up to 15 s late, closing the gap without touching the
+                // grace period itself. Log line stays latched once per suspend episode (strap log clip
+                // budget); the resend is not — safe to repeat, `disableLiveHRForSuspend` is a harmless
+                // read-only-shaped write when already streaming-or-not per its own doc.
+                if liveHRSuspended {
+                    if !loggedUnexpectedLiveHRWhileSuspended {
+                        loggedUnexpectedLiveHRWhileSuspended = true
+                        log("Oura: live-HR push arrived while SUSPENDED (\(hr.bpm) bpm) - dhr_disable did not "
+                            + "stop the stream, self-healing now")
+                    }
+                    startReengageTimer()
                 }
                 // Drop the first (settling) live-HR sample of the session — it is frequently an artifact.
                 // The value is never shown or persisted; the NEXT sample becomes the first real reading.
@@ -2266,9 +2279,16 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// `handleSecureFrame` routes them to `.enableAck`; `OuraDriver.nextStep(after: .enableAckReceived)`
     /// no-ops outside `.enablingLiveHR`, so sending them while the driver is idle/streaming is a harmless
     /// read-only-shaped write, not a state-machine hazard. Only fires when the driver actually reached
-    /// `.streaming` this session; there is nothing to disable before then. NOT yet hardware-validated -
-    /// the next capture needs to show green 0x80 actually collapse after SUSPENDED fires, this time with
-    /// the corrected mode byte and the unsubscribe write both in place.
+    /// `.streaming` this session; there is nothing to disable before then.
+    ///
+    /// 2026-08-21 overnight hardware result: mostly works. 16/16 reconnects during the main overnight
+    /// SUSPENDED window were clean (connect -> enable -> immediate same-second disable, zero leaks) -
+    /// the connect-time race above is fixed. One falsifier hit remained, at a suspend-ARM boundary (not
+    /// a reconnect): `reengageLiveHR`'s 15 s tick is what actually calls this function, so there is an
+    /// up-to-15 s window right as the grace expires where a push can land after `liveHRSuspended` flips
+    /// true but before the next tick gets here. Closed by having the push handler itself (the `.hr` case
+    /// in `ingest`) call `startReengageTimer()` - which runs this exact stop-and-disable transition - the
+    /// moment it sees a stale push, instead of waiting for the tick. Not yet hardware-validated.
     private func disableLiveHRForSuspend() {
         guard let driver, driver.phase == .streaming else { return }
         write([OuraCommands.liveHRDisable(), OuraCommands.liveHRUnsubscribe()])
