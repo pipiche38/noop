@@ -1750,6 +1750,10 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
     val tempUnit = UnitPrefs.temperature(context)
     // The Effort detail renders per the user's Effort display scale (0-100 vs 0-21), like the Today tile.
     val effortScale = UnitPrefs.effortScale(context)
+    // #103/queue-11a follow-up: same reactive source the Key Metrics tile already collects (empty when
+    // the toggle is OFF, since the engine writes nothing) — reused here so this screen's spo2 candidate
+    // fallback (in buildVitalDetail) stays in sync with the tile it drills in from.
+    val spo2CandidateByDay by vm.spo2CandidateByDay.collectAsStateWithLifecycle()
     // Profile drives the Fitness Age readiness/countdown shown when that vital has no value yet.
     val profile = remember { ProfileStore.from(context.applicationContext) }
     val isSeriesBacked = key in SERIES_BACKED_VITAL_KEYS
@@ -1770,7 +1774,9 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
         }
     }
     val detail = if (isSeriesBacked) seriesDetail
-    else remember(days, key, tempUnit, effortScale) { buildVitalDetail(days, key, tempUnit, effortScale) }
+    else remember(days, key, tempUnit, effortScale, spo2CandidateByDay) {
+        buildVitalDetail(days, key, tempUnit, effortScale, spo2CandidateByDay)
+    }
     var range by remember { mutableStateOf(VitalDetailRange.MONTH) }
 
     // The subtitle tracks how much history the metric has, so we never promise a "historical trend" the
@@ -2053,6 +2059,7 @@ private fun buildVitalDetail(
     key: String,
     tempUnit: TemperatureUnit,
     effortScale: EffortScale = EffortScale.HUNDRED,
+    spo2CandidateByDay: Map<String, Double> = emptyMap(),
 ): VitalDetailModel? {
     return when (key) {
     // The Today Key-Metrics Recovery tile's drill-in: the Recovery (Charge) trend timeline, matching the
@@ -2083,14 +2090,25 @@ private fun buildVitalDetail(
         readings = days.mapNotNull { row -> row.respRateBpm?.let { VitalReading(row.day, it, row.deviceId) } },
         format = { String.format(Locale.US, "%.1f", it) },
     )
-    "spo2" -> VitalDetailModel(
-        key = key,
-        title = uiString(R.string.l10n_health_screen_blood_oxygen_a8ad9ff5),
-        unit = "%",
-        color = Palette.metricCyan,
-        readings = days.mapNotNull { row -> row.spo2Pct?.let { VitalReading(row.day, it, row.deviceId) } },
-        format = { String.format(Locale.US, "%.0f", it) },
-    )
+    "spo2" -> {
+        // #103/queue-11a follow-up: fill in the spo2 candidate fallback for any day with no calibrated
+        // spo2Pct — the SAME fallback the Key Metrics tile already shows (found 2026-08-24: an
+        // Oura-only or WHOOP-4.0-only install with the toggle ON saw a real number on the tile but an
+        // empty/stale screen here, since this branch never got #1568's candidate wiring). Calibrated
+        // days always win; this only ADDS days the calibrated column is missing, never overwrites one.
+        val calibrated = days.mapNotNull { row -> row.spo2Pct?.let { row.day to VitalReading(row.day, it, row.deviceId) } }.toMap()
+        val candidateOnly = spo2CandidateByDay
+            .filterKeys { it !in calibrated }
+            .map { (day, value) -> day to VitalReading(day, value, SPO2_CANDIDATE_ATTRIBUTION_SOURCE) }
+        VitalDetailModel(
+            key = key,
+            title = uiString(R.string.l10n_health_screen_blood_oxygen_a8ad9ff5),
+            unit = "%",
+            color = Palette.metricCyan,
+            readings = (calibrated.values + candidateOnly.map { it.second }).sortedBy { it.day },
+            format = { String.format(Locale.US, "%.0f", it) },
+        )
+    }
     "rhr" -> VitalDetailModel(
         key = key,
         title = uiString(R.string.l10n_health_screen_resting_heart_rate_9700f4d8),
