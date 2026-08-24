@@ -92,6 +92,8 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 // MARK: - Health Monitor (ported from Strand/Screens/HealthView.swift)
 //
@@ -1753,7 +1755,19 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
     // #103/queue-11a follow-up: same reactive source the Key Metrics tile already collects (empty when
     // the toggle is OFF, since the engine writes nothing) — reused here so this screen's spo2 candidate
     // fallback (in buildVitalDetail) stays in sync with the tile it drills in from.
-    val spo2CandidateByDay by vm.spo2CandidateByDay.collectAsStateWithLifecycle()
+    //
+    // The FLOW is swapped per metric, not the collect call. Only the Blood Oxygen detail reads this map,
+    // but this composable serves every vital, and subscribing the real flow runs a database union
+    // (`metricSeriesComputedUnion`) that Resting HR / HRV / Skin Temp would pay for and discard —
+    // `WhileSubscribed(5_000)` means arriving more than five seconds after the tile unsubscribed re-runs
+    // it, which is the normal Today → Health → tap path. Gating the CALL instead (`key == "spo2" && …`)
+    // would put a composable in a conditionally-evaluated position and corrupt the slot table when the
+    // key changes; swapping the flow keeps exactly one unconditional call site. It also keeps the
+    // `remember` below stable for every other vital, since the map is then a constant.
+    val candidateFlow: StateFlow<Map<String, Double>> = remember(key) {
+        if (key == "spo2") vm.spo2CandidateByDay else MutableStateFlow(emptyMap())
+    }
+    val spo2CandidateByDay by candidateFlow.collectAsStateWithLifecycle()
     // Profile drives the Fitness Age readiness/countdown shown when that vital has no value yet.
     val profile = remember { ProfileStore.from(context.applicationContext) }
     val isSeriesBacked = key in SERIES_BACKED_VITAL_KEYS

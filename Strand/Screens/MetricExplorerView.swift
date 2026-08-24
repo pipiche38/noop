@@ -815,10 +815,24 @@ struct MetricDetailView: View {
         // WHOOP-4.0-only install with the toggle ON saw a real number on the tile but an empty/stale
         // screen here). Calibrated days always win — this only ADDS days the calibrated series is
         // missing, never overwrites one. Gated on the same toggle every other candidate site checks.
-        if metric.key == "spo2", PuffinExperiment.spo2CandidateDisplayEnabled {
+        //
+        // The source is part of the gate, not just the key. The catalog carries TWO `spo2` descriptors —
+        // `my-whoop` and `xiaomi-band` — and `MetricDescriptor.id` is `source + ":" + key`, so they are
+        // different metrics that happen to share a key. Only the WHOOP/Oura partition has a candidate
+        // series behind it; without this a Xiaomi Band's Blood Oxygen card would be asking for a strap
+        // estimate that is not its own.
+        if metric.key == "spo2", metric.source == "my-whoop", PuffinExperiment.spo2CandidateDisplayEnabled {
             let candidateSeries = await repo.exploreSeries(key: "spo2_candidate", source: metric.source)
             if !candidateSeries.isEmpty {
-                var byDay = Dictionary(uniqueKeysWithValues: series.map { ($0.day, $0.value) })
+                // `uniquingKeysWith`, matching the `sourceByDay` build above — NOT
+                // `uniqueKeysWithValues`, which TRAPS on a duplicate day. `exploreSeries` collapses by day
+                // on the `my-whoop` path it takes here, but `series(key:source:)` — the path every other
+                // source falls through to — ends `pts.map { … }` with no collapsing at all, so the
+                // guarantee is the caller's, not the type's. The Kotlin twin uses `.toMap()`, which keeps
+                // the last value silently; a trap here would mean the same input crashes one platform and
+                // not the other.
+                var byDay = Dictionary(series.map { ($0.day, $0.value) },
+                                       uniquingKeysWith: { first, _ in first })
                 for point in candidateSeries where byDay[point.day] == nil {
                     byDay[point.day] = point.value
                     sourceByDay[point.day] = spo2CandidateAttributionSource
