@@ -344,11 +344,25 @@ struct FullDayChartView: View {
 
     private var statsFooter: some View {
         let v = displayPoints.map(\.value)
-        return ChartFooter([
+        var items: [(LocalizedStringKey, String)] = [
             ("Min", format(v.min() ?? 0)),
             ("Avg", format(v.reduce(0, +) / Double(max(1, v.count)))),
             ("Max", format(v.max() ?? 0)),
-        ])
+        ]
+        // Movement's own Min/Avg/Max describe one ~30 s window's motion_seconds, which isn't very
+        // actionable on its own — add the shown span's TOTAL active time. This is the literal SUM of
+        // every window's own motion_seconds (each window already reports how many of its own ~30 s it
+        // spent moving; 0x47 is movement-gated, per OuraStreamMapping.motionEventKind's doc comment).
+        // Honest instrumentation, not a step count: worklog/analysis/2026-08-25-oura-steps-independent
+        // -review.md found motion_seconds a POOR step-count proxy (flat across a 5x range of real daily
+        // steps), but that finding is about predicting steps — "seconds spent moving" is exactly what
+        // this field measures by construction, so summing it needs no calibration and carries none of
+        // that risk. Respects the current zoom, same as Min/Avg/Max above.
+        if metric == .ouraMovement {
+            let activeSeconds = Int(v.reduce(0, +))
+            items.append(("Active", Self.hoursMinutes(activeSeconds)))
+        }
+        return ChartFooter(items)
     }
 
     // MARK: Read

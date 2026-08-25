@@ -37,6 +37,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.util.Calendar
 import java.util.Locale
+import kotlin.math.roundToInt
 
 // MARK: - Deep Timeline (Android twin of FullDayChartView) — #575
 //
@@ -292,6 +293,21 @@ fun FullDayChartScreen(vm: AppViewModel, onBack: () -> Unit) {
                         TimelineStat(stringResource(R.string.timeline_min), formatValue(metric, vals.minOrNull() ?: 0.0), Modifier.weight(1f))
                         TimelineStat(stringResource(R.string.timeline_avg), formatValue(metric, vals.average()), Modifier.weight(1f))
                         TimelineStat(stringResource(R.string.timeline_max), formatValue(metric, vals.maxOrNull() ?: 0.0), Modifier.weight(1f))
+                        // Movement's own Min/Avg/Max describe one ~30 s window's motion_seconds, which
+                        // isn't very actionable on its own — add the shown span's TOTAL active time: the
+                        // literal SUM of every window's own motion_seconds (each window already reports
+                        // how many of its own ~30 s it spent moving; 0x47 is movement-gated, per
+                        // OuraStreamMapping.EVENT_MOTION's doc comment). Honest instrumentation, not a
+                        // step count: worklog/analysis/2026-08-25-oura-steps-independent-review.md found
+                        // motion_seconds a POOR step-count proxy (flat across a 5x range of real daily
+                        // steps), but that finding is about predicting steps — "seconds spent moving" is
+                        // exactly what this field measures by construction, so summing it needs no
+                        // calibration and carries none of that risk. Respects the current zoom, same as
+                        // Min/Avg/Max above. Twin of Swift FullDayChartView.statsFooter.
+                        if (metric == TimelineMetric.Movement) {
+                            val activeSeconds = vals.sum().roundToInt()
+                            TimelineStat(stringResource(R.string.timeline_active), hoursMinutesColon(activeSeconds), Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -348,6 +364,14 @@ private fun TimelineStat(label: String, value: String, modifier: Modifier = Modi
         Text(label, style = NoopType.footnote, color = Palette.textTertiary)
         Text(value, style = NoopType.captionNumber, color = Palette.textSecondary)
     }
+}
+
+/** "H:MM" for a duration in seconds (e.g. a 6h06m span -> "6:06"). Twin of Swift
+ *  FullDayChartView.hoursMinutes / TodayScreen.kt's private hrHoursMinutes (file-private there too, so
+ *  duplicated rather than shared across files, matching the Swift original). */
+private fun hoursMinutesColon(seconds: Int): String {
+    val s = if (seconds < 0) 0 else seconds
+    return "${s / 3600}:${(s % 3600 / 60).toString().padStart(2, '0')}"
 }
 
 // MARK: - Read
