@@ -174,6 +174,8 @@
     <string name="timeline_min">MIN</string>
     <string name="timeline_avg">AVG</string>
     <string name="timeline_max">MAX</string>
+    <!-- Movement's total active time in the shown span (sum of every 0x47 window's own motion_seconds) -->
+    <string name="timeline_active">ACTIVE</string>
     <string name="timeline_empty_metric">No %1$s here</string>
     <string name="timeline_nothing_offloaded">Nothing offloaded for this window yet.</string>
     <string name="timeline_other_sources_no_offload">Other sources don\'t offload raw per-second data on-device.</string>

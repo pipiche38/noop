@@ -165,6 +165,7 @@
     <string name="timeline_min">MIN</string>
     <string name="timeline_avg">AVG</string>
     <string name="timeline_max">MAX</string>
+    <string name="timeline_active">AKTIV</string>
     <string name="timeline_empty_metric">Kein(e) %1$s hier</string>
     <string name="timeline_nothing_offloaded">Für dieses Fenster wurde noch nichts übertragen.</string>
     <string name="timeline_other_sources_no_offload">Andere Quellen übertragen keine rohen Sekundendaten auf das Gerät.</string>
