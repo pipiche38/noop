@@ -160,6 +160,7 @@
     <string name="timeline_min">MIN</string>
     <string name="timeline_avg">AVG</string>
     <string name="timeline_max">MAX</string>
+    <string name="timeline_active">ATIVO</string>
     <string name="timeline_empty_metric">Não %1$s aqui</string>
     <string name="timeline_nothing_offloaded">Ainda não foi descarregado nada para esta janela.</string>
     <string name="timeline_other_sources_no_offload">Outras fontes não descarregam dados brutos por segundo para o dispositivo.</string>
