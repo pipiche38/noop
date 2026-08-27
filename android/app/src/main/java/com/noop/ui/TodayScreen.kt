@@ -1548,6 +1548,7 @@ fun TodayScreen(
                                     spo2CarryDay = lastSpo2Day,
                                     respCarryDay = lastRespDay,
                                     spo2CandidateByDay = spo2CandidateByDay,
+                                    skinTempCarryDay = lastSkinTempDay,
                                     unitSystem = unitSystem,
                                     effortScale = effortScale,
                                     effortForDay = effortForDay,   // #1001: same figure as the hero ring
@@ -4864,6 +4865,18 @@ private fun RecordingStatusChip(state: RecordingState, onConnect: () -> Unit) {
 // `provenanceBadgeLabel` By-Day mappers are kept (Intelligence/Trends + tests still use that vocabulary).
 
 /**
+ * The Key Metrics Skin Temp tile's 3-way fallback: today's row, then the whole-row recovery carry,
+ * then the per-field skin-temp carry (mirrors spo2CarryDay/respCarryDay's reasoning — carriedDay can
+ * land on a row with null skinTempDevC even when a genuine reading exists further back). Extracted so
+ * the carry regression ryanbr's PR #1589 review flagged is testable without Compose/Robolectric.
+ */
+internal fun resolveSkinTempDevC(
+    d: DailyMetric?,
+    carriedDay: DailyMetric?,
+    skinTempCarryDay: DailyMetric?,
+): Double? = d?.skinTempDevC ?: carriedDay?.skinTempDevC ?: skinTempCarryDay?.skinTempDevC
+
+/**
  * The full 14-day metric grid, mirroring the macOS LazyVGrid order:
  * Charge, Effort, Rest, HRV, Resting HR, Blood Oxygen, Respiratory,
  * Steps, Weight, Calories. Each tile is a fixed-height [SparkStatTile] so the
@@ -4889,6 +4902,12 @@ private fun MetricGrid(
     // outside the window and the line cannot — but neither can now show data the other has no access to,
     // which is what made this tile render a number above a blank panel.
     spo2CandidateByDay: Map<String, Double> = emptyMap(),
+    // PER-FIELD skin-temp carry (ryanbr review, PR #1589): same reason as spo2CarryDay/respCarryDay —
+    // carriedDay (lastScoredRecoveryDay) is a whole-row carry that lands on rows with null
+    // skinTempDevC, so the Key Metrics tile falls through to the last row that actually has a
+    // reading. Mirrors the "Your Cards" DashboardCard.SKIN_TEMP path's skinTempDay fallback and iOS
+    // TodayView's lastSkinTempDay chain.
+    skinTempCarryDay: DailyMetric? = null,
     unitSystem: UnitSystem = UnitSystem.METRIC,
     effortScale: EffortScale = EffortScale.HUNDRED,
     // #1001: the day's resolved Effort (live-preferring for today, floored at the stored row). Threaded
@@ -5092,7 +5111,7 @@ private fun MetricGrid(
             // `d ?: carriedDay` idiom every other simple tile above uses (HRV/RESTING_HR), and the SAME
             // `SkinTempDisplay` formatter the DashboardCard.SKIN_TEMP branch uses so a deviation reads
             // "+0.1 Δ°C" identically on both surfaces (#622: bimodal absolute-vs-deviation field).
-            val v = d?.skinTempDevC ?: carriedDay?.skinTempDevC
+            val v = resolveSkinTempDevC(d, carriedDay, skinTempCarryDay)
             val fahrenheit = UnitPrefs.temperature(LocalContext.current) == TemperatureUnit.FAHRENHEIT
             KeyTileData(
                 label = uiString(R.string.today_card_skin_temp),
