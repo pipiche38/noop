@@ -1754,16 +1754,6 @@ struct LiquidTodayView: View {
     @AppStorage(UnitPrefs.effortScaleKey) private var effortScaleRaw = EffortScale.hundred.rawValue
     private var effortScale: EffortScale { UnitPrefs.resolveEffortScale(effortScaleRaw) }
 
-    // Added for the new Skin Temp Key Metrics tile (2026-08-24): °C/°F resolved the SAME way every other
-    // skin-temp surface does (`TodayView`, `MetricExplorerView`, `VitalSignsSummary`) — the explicit
-    // override when set, else derived from the unit system. Neither existed in this file before.
-    @AppStorage(UnitPrefs.systemKey) private var unitSystemRaw = UnitSystem.metric.rawValue
-    private var unitSystem: UnitSystem { UnitSystem(rawValue: unitSystemRaw) ?? .metric }
-    @AppStorage(UnitPrefs.temperatureKey) private var temperatureRaw = ""
-    private var temperatureUnit: TemperatureUnit {
-        UnitPrefs.resolveTemperature(system: unitSystem, override: temperatureRaw)
-    }
-
     private func effortText(_ s: Double?) -> String {
         guard let s else { return "–" }
         // Route through the shared formatter instead of hardcoding *21: a default (0–100) user was shown the
