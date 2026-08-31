@@ -2,6 +2,7 @@ import SwiftUI
 import StrandDesign
 import StrandAnalytics
 import StrandImport
+import OuraProtocol
 import PolarProtocol
 import WhoopStore
 import WhoopProtocol
@@ -62,6 +63,55 @@ struct TestCentreView: View {
     // #1284 residual 3: experimental Oura 0x49-onset keying, only offered when an Oura ring is paired.
     @AppStorage(AppModel.ouraOnsetKeyingKey) private var ouraOnsetKeying = false
     private var ouraPaired: Bool { model.deviceRegistry?.devices.contains { $0.brand == "Oura" } ?? false }
+
+    /// The profile the 0x20 write experiment prefills from. Values are OVERRIDABLE in the field below:
+    /// the encoding is unverified, so the point is to try 175 (cm) and then 1750 (mm) without a rebuild.
+    @EnvironmentObject var profile: ProfileStore
+
+    // 0x20 user-info write EXPERIMENT (see OuraUserInfoWrite). Nothing here fires automatically.
+    @State private var userInfoField: OuraUserInfoField = .height
+    @State private var userInfoValueText = ""
+    @State private var userInfoRawHex = ""
+    @State private var showUserInfoConfirm = false
+
+    /// The value bytes the current selection would send, or nil when the entry is not usable yet.
+    /// Raw-hex mode is how the date-of-birth (age) path is probed: there is no age setter and no capture
+    /// pins the 9-byte type-5 layout, so a guess must be typed deliberately, never offered as "Age".
+    private var userInfoValueBytes: [UInt8]? {
+        if userInfoField == .dateOfBirth {
+            let cleaned = userInfoRawHex.filter { !$0.isWhitespace }
+            guard cleaned.count == userInfoField.valueByteCount * 2 else { return nil }
+            var out: [UInt8] = []
+            var idx = cleaned.startIndex
+            while idx < cleaned.endIndex {
+                let next = cleaned.index(idx, offsetBy: 2)
+                guard let b = UInt8(cleaned[idx..<next], radix: 16) else { return nil }
+                out.append(b); idx = next
+            }
+            return out
+        }
+        guard let n = UInt32(userInfoValueText.trimmingCharacters(in: .whitespaces)) else { return nil }
+        return try? OuraUserInfoWrite.encodeLE(n, width: userInfoField.valueByteCount)
+    }
+
+    /// The exact frame that would go on the wire, so it can be read BEFORE sending.
+    private var userInfoFramePreview: String {
+        guard let v = userInfoValueBytes, let cmd = try? OuraUserInfoWrite.command(userInfoField, value: v) else {
+            return "enter a value"
+        }
+        return cmd.bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Prefill from the NOOP profile when the field changes. Sex maps through the 0x5c gender code.
+    private func prefillUserInfoValue() {
+        switch userInfoField {
+        case .height: userInfoValueText = String(Int(profile.heightCm.rounded()))
+        case .weight: userInfoValueText = String(Int(profile.weightKg.rounded()))
+        case .gender: userInfoValueText = String(OuraUserInfoWrite.genderCode(forSex: profile.sex))
+        case .unit:   userInfoValueText = "0"
+        case .dateOfBirth: userInfoValueText = ""
+        }
+    }
 
     // Section 4: Experimental algorithms. Bound to the SAME PuffinExperiment keys the Android card writes, so
     // the platforms stay in lockstep. The PPG-HR sub-lag interpolation variant and the HRV-readiness readout,
@@ -310,8 +360,73 @@ struct TestCentreView: View {
                         }
                     }
                     .tint(StrandPalette.accent)
+
+                    Divider().overlay(StrandPalette.hairline)
+                    ouraUserInfoWriteBlock
                 }
             }
+        }
+    }
+
+    /// The 0x20 user-info WRITE experiment. EXPERIMENTAL, manual, one field at a time.
+    ///
+    /// This is the only control in NOOP that writes user data to a ring. It exists to answer one
+    /// question: does a 0x20 write change what tag 0x5c reports? Nothing calls it automatically, and
+    /// deliberately NOT on connect: the value encoding is unverified, an automatic write would destroy
+    /// the clean before-state the readout depends on, and the connect/bond window is the app's most
+    /// fragile path (#1635). Read the strap log for the WRITE line, the 0x20 ACK, and the next 0x5c.
+    @ViewBuilder
+    private var ouraUserInfoWriteBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Oura user-info write (experimental)").font(StrandFont.body)
+            Text("Writes one 0x20 user-info field to the ring and logs what comes back. The ring reports 0x5c as firmware defaults (40 y, 75 kg, sex unset, 176 cm) even though your Oura app profile is correct, and the Oura app never writes it. Whether 0x20 lands in 0x5c is UNKNOWN, and so is the value encoding: try 175 for cm, then 1750 for mm. Age has no setter, only date-of-birth, whose 9-byte layout is unknown, so it is raw hex only.")
+                .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Picker("Field", selection: $userInfoField) {
+                Text("Height").tag(OuraUserInfoField.height)
+                Text("Sex").tag(OuraUserInfoField.gender)
+                Text("Weight").tag(OuraUserInfoField.weight)
+                Text("DOB (raw)").tag(OuraUserInfoField.dateOfBirth)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: userInfoField) { _ in prefillUserInfoValue() }
+
+            if userInfoField == .dateOfBirth {
+                TextField("18 hex chars (9 bytes)", text: $userInfoRawHex)
+                    .font(StrandFont.body).textFieldStyle(.roundedBorder)
+            } else {
+                TextField("value", text: $userInfoValueText)
+                    .font(StrandFont.body).textFieldStyle(.roundedBorder)
+            }
+
+            Text("Frame: \(userInfoFramePreview)")
+                .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
+
+            HStack(spacing: 12) {
+                Button("Write to ring") { showUserInfoConfirm = true }
+                    .disabled(userInfoValueBytes == nil)
+                Button("Write zeros") {
+                    _ = model.sourceCoordinator?.ouraSource?.writeUserInfo(
+                        field: userInfoField,
+                        value: [UInt8](repeating: 0, count: userInfoField.valueByteCount))
+                }
+            }
+            .font(StrandFont.body).tint(StrandPalette.accent)
+        }
+        .onAppear { if userInfoValueText.isEmpty { prefillUserInfoValue() } }
+        .alert("Write to the ring?", isPresented: $showUserInfoConfirm) {
+            Button("Cancel", role: .cancel) { }
+            Button("Write", role: .destructive) {
+                guard let v = userInfoValueBytes else { return }
+                if model.sourceCoordinator?.ouraSource?.writeUserInfo(field: userInfoField, value: v) != true {
+                    infoTitle = "Not written"
+                    infoMessage = "No connected Oura ring. Connect the ring, then try again."
+                    showInfo = true
+                }
+            }
+        } message: {
+            Text("Sends \(userInfoFramePreview) to the ring. This changes ring-side config. Restore with the firmware default (height 176, weight 75, sex 2) or write zeros.")
         }
     }
 

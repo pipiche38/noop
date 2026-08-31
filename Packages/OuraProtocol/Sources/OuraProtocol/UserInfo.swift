@@ -151,3 +151,65 @@ public func parseOuraUserInfoAck(_ bytes: [UInt8]) -> OuraUserInfoAck? {
           let field = OuraUserInfoField(rawValue: bytes[2]) else { return nil }
     return OuraUserInfoAck(field: field, result: bytes[3])
 }
+
+// MARK: - Reading back what the ring reports (tag 0x5c)
+
+/// One decoded `0x5c` `user_information` record — the read-back side of the experiment.
+///
+/// The field meanings are [open_oura-evt]'s inference (`_status: inferred`), not a recovered parser,
+/// so they are reported as named bytes and nothing here treats them as authoritative. NOOP does not
+/// score or store any of it; the record exists to answer whether a `0x20` write moves these bytes.
+public struct OuraUserInfoRecord: Equatable, Sendable {
+    public let ringTimestamp: UInt32
+    public let ageYears: UInt8
+    public let weightKg: UInt8
+    public let sexCode: UInt8
+    public let heightCm: UInt8
+    /// The verbatim four payload bytes, so a log line can show what arrived even if the inferred
+    /// field split above turns out to be wrong.
+    public let raw: [UInt8]
+
+    public init(ringTimestamp: UInt32, raw: [UInt8]) {
+        self.ringTimestamp = ringTimestamp
+        self.raw = raw
+        self.ageYears  = raw.count > 0 ? raw[0] : 0
+        self.weightKg  = raw.count > 1 ? raw[1] : 0
+        self.sexCode   = raw.count > 2 ? raw[2] : 0
+        self.heightCm  = raw.count > 3 ? raw[3] : 0
+    }
+
+    /// `28 4b 02 b0` — the value every capture of this ring has produced, and the same bytes
+    /// [open_oura-evt] read off a factory-reset ring. Used only to label a log line "(defaults)".
+    public static let firmwareDefaults: [UInt8] = [0x28, 0x4B, 0x02, 0xB0]
+    public var isFirmwareDefault: Bool { raw == Self.firmwareDefaults }
+
+    /// Hex of the payload, for the strap log.
+    public var rawHex: String { raw.map { String(format: "%02x", $0) }.joined() }
+}
+
+/// The `0x5c` event tag.
+public let ouraUserInfoTag: UInt8 = 0x5C
+
+/// Scan a TLV byte buffer for `0x5c` records.
+///
+/// Walks `<tag> <len> <body…>` (where an event body is `rt:u32LE` + payload), so it works whether the
+/// caller hands over one record or a whole concatenated notification. Malformed or truncated tails
+/// stop the walk rather than throwing — this runs on every inbound notification and must never be
+/// able to break ingest.
+public func scanOuraUserInfoRecords(tlvBytes: [UInt8]) -> [OuraUserInfoRecord] {
+    var out: [OuraUserInfoRecord] = []
+    var i = 0
+    while i + 2 <= tlvBytes.count {
+        let tag = tlvBytes[i]
+        let len = Int(tlvBytes[i + 1])
+        let end = i + 2 + len
+        guard end <= tlvBytes.count else { break }
+        if tag == ouraUserInfoTag, len >= 4 {
+            let rt = UInt32(tlvBytes[i + 2]) | UInt32(tlvBytes[i + 3]) << 8
+                   | UInt32(tlvBytes[i + 4]) << 16 | UInt32(tlvBytes[i + 5]) << 24
+            out.append(OuraUserInfoRecord(ringTimestamp: rt, raw: Array(tlvBytes[(i + 6)..<end])))
+        }
+        i = end
+    }
+    return out
+}

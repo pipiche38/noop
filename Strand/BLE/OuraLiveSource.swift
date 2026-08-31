@@ -355,6 +355,17 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// ring sent, so after a full connect a hole in a decoded file can be pinned as a decode drop vs ring-side.
     /// No dedup (a re-serve is still evidence the ring re-sent it); the offline reframer collapses duplicates.
     private let rawDump: OuraRawDump?
+
+    // MARK: - 0x20 user-info write EXPERIMENT (default-off, Test Centre only)
+
+    /// The most recent `0x5c` `user_information` record this connection has seen, so a later one can be
+    /// reported as changed or unchanged rather than just printed. Never persisted, never scored.
+    private var lastUserInfoRecord: OuraUserInfoRecord?
+    /// The last `0x20` write this connection sent, if any: the field, the value bytes, and when. Set by
+    /// `writeUserInfo` and read only to caption the ack and the next `0x5c` — so the log can say which
+    /// record is the first one AFTER a write instead of leaving the reader to line up timestamps.
+    private var lastUserInfoWrite: (field: OuraUserInfoField, valueHex: String, at: Date)?
+
     /// Cached local-day formatter (the 0x50 stream is high-volume; avoid building one per record).
     private static let activityDayFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f   // local time zone by default
@@ -1577,6 +1588,58 @@ public final class OuraLiveSource: NSObject, ObservableObject {
             log("Oura: -> \(cmd.label)")
             peripheral.writeValue(Data(cmd.bytes), for: writeCharacteristic, type: .withoutResponse)
         }
+    }
+
+    // MARK: - 0x20 user-info write EXPERIMENT
+
+    /// Log every `0x5c` `user_information` record the ring sends. ALWAYS-ON: `0x5c` is rare (at most one
+    /// per full drain, and zero in some), so this costs nothing when nothing happens and is the only
+    /// readout the write experiment has. Nothing here persists, scores, or acts on the values.
+    ///
+    /// Field names are [open_oura-evt]'s INFERENCE (`_status: inferred`), so the raw four bytes are
+    /// printed first and the named split second — if the inference is wrong, the log still carries the
+    /// evidence to re-derive it.
+    private func observeUserInfoRecords(in bytes: [UInt8]) {
+        for rec in scanOuraUserInfoRecords(tlvBytes: bytes) {
+            let changed = lastUserInfoRecord.map { $0.raw != rec.raw } ?? false
+            let sinceWrite = lastUserInfoWrite.map {
+                " | FIRST 0x5c since our \($0.field.label)=\($0.valueHex) write \(Int(Date().timeIntervalSince($0.at)))s ago"
+            } ?? ""
+            log("Oura: 0x5c user_information raw=\(rec.rawHex) rt=\(rec.ringTimestamp)"
+                + (rec.isFirmwareDefault ? " (FIRMWARE DEFAULTS)" : " (NOT the firmware defaults)")
+                + (changed ? " CHANGED from \(lastUserInfoRecord?.rawHex ?? "?")" : "")
+                + " | inferred [open_oura-evt]: age=\(rec.ageYears) weight=\(rec.weightKg)kg"
+                + " sex=\(rec.sexCode) height=\(rec.heightCm)cm" + sinceWrite)
+            lastUserInfoRecord = rec
+            // One readout per write is the experiment; keep the marker so a SECOND 0x5c in the same
+            // connection is not also captioned as "the first since the write".
+            if !sinceWrite.isEmpty { lastUserInfoWrite = nil }
+        }
+    }
+
+    /// Send one `0x20` user-info write. EXPERIMENT ONLY — reachable exclusively from the Test Centre
+    /// action; nothing in the connect flow or `OuraDriver` calls it, and it is never sent automatically.
+    ///
+    /// Returns false (and writes nothing) if the link is not ready, so the caller can say so rather than
+    /// silently appearing to have written. The value bytes are logged verbatim: this is a write to the
+    /// ring's own config, and a strap log that does not say exactly what went out is useless afterwards.
+    @discardableResult
+    func writeUserInfo(field: OuraUserInfoField, value: [UInt8]) -> Bool {
+        guard peripheral != nil, writeCharacteristic != nil else {
+            log("Oura: 0x20 user-info write SKIPPED - no connected ring / write characteristic")
+            return false
+        }
+        guard let cmd = try? OuraUserInfoWrite.command(field, value: value) else {
+            log("Oura: 0x20 user-info write REFUSED - \(value.count)B value, field \(field.label) wants \(field.valueByteCount)B")
+            return false
+        }
+        let valueHex = value.map { String(format: "%02x", $0) }.joined()
+        let frameHex = cmd.bytes.map { String(format: "%02x", $0) }.joined()
+        log("Oura: 0x20 user-info WRITE field=\(field.label) value=\(valueHex) frame=\(frameHex)"
+            + " - EXPERIMENT; last 0x5c seen this connection: \(lastUserInfoRecord?.rawHex ?? "none")")
+        lastUserInfoWrite = (field: field, valueHex: valueHex, at: Date())
+        write([cmd])
+        return true
     }
 
     /// Advance the driver with a transition and write whatever it asks for next.
@@ -2846,6 +2909,20 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
            let resp = OuraFraming.parseSyncTimeResponse(syncFrame.body) {
             handleSyncTimeResponse(resp)
         }
+        // The `0x21` user-info reply (`21 02 <type> <result>`) to a `0x20` write — EXPERIMENT ONLY, and
+        // peeked the same non-destructive way as the 0x11/0x13/0x0D frames above (op 0x21 is below the
+        // event-tag range >= 0x41, so it round-trips through the TLV decoder as a harmless unknown-tag
+        // no-op). ALWAYS-ON rather than Test-Centre-gated: a 0x21 can only appear if this build wrote a
+        // 0x20, which nothing but an explicit Test Centre action does, so it costs nothing when nothing
+        // happens and is exactly the evidence that is missing otherwise. Reports only what the ring said
+        // — `result` is the ring accepting the WRITE, and says nothing about whether 0x5c moved.
+        if let ackFrame = frames.first(where: { $0.op == 0x21 }),
+           let ack = parseOuraUserInfoAck([ackFrame.op, UInt8(ackFrame.body.count)] + ackFrame.body) {
+            let sent = lastUserInfoWrite.map { " (we wrote \($0.field.label)=\($0.valueHex) \(Int(Date().timeIntervalSince($0.at)))s ago)" } ?? " (no 0x20 write recorded this connection)"
+            log("Oura: 0x20 user-info ACK field=\(ack.field.label) result=\(ack.result)"
+                + (ack.isSuccess ? " (accepted)" : " (REFUSED)") + sent
+                + " - ring accepted the write only; whether 0x5c changes is a separate read")
+        }
         // The `0x0D` GetBattery response is ALSO an outer frame (never a TLV record, s6.10), detected the
         // same non-destructive way as the 0x11 summary: its op is below the event-tag range (>= 0x41), so
         // it round-trips safely through the TLV decoder as an "unknown tag" no-op if left unfiltered. Routed
@@ -2890,12 +2967,14 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
                                  .flatMap { [$0.op, UInt8($0.body.count)] + $0.body }
             if !tlvBytes.isEmpty {
                 rawDump?.record(bytes: tlvBytes)
+                observeUserInfoRecords(in: tlvBytes)
                 ingestHistory(driver.ingest(notification: tlvBytes, reassembler: reassembler))
             }
             return
         }
         // No secure frame in this notification: treat the whole value as TLV record bytes.
         rawDump?.record(bytes: bytes)
+        observeUserInfoRecords(in: bytes)
         ingestHistory(driver.ingest(notification: bytes, reassembler: reassembler))
     }
 

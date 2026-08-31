@@ -85,4 +85,46 @@ final class UserInfoTests: XCTestCase {
                           "\(field) label: \(OuraUserInfoWrite.clear(field).label)")
         }
     }
+
+    // MARK: - 0x5c read-back
+
+    /// The record every capture of this ring has produced, decoded under [open_oura-evt]'s inference.
+    func testDecodesTheObservedDefaultRecord() {
+        let bytes: [UInt8] = [0x5C, 0x08, 0xFC, 0xEA, 0x5D, 0x01, 0x28, 0x4B, 0x02, 0xB0]
+        let recs = scanOuraUserInfoRecords(tlvBytes: bytes)
+        XCTAssertEqual(recs.count, 1)
+        let r = try! XCTUnwrap(recs.first)
+        XCTAssertEqual(r.ringTimestamp, 0x015D_EAFC)
+        XCTAssertEqual(r.ageYears, 40)
+        XCTAssertEqual(r.weightKg, 75)
+        XCTAssertEqual(r.sexCode, 2)
+        XCTAssertEqual(r.heightCm, 176)
+        XCTAssertEqual(r.rawHex, "284b02b0")
+        XCTAssertTrue(r.isFirmwareDefault)
+    }
+
+    /// A written-through value must read back as NOT the default - that is the experiment's readout.
+    func testANonDefaultRecordIsNotFlaggedDefault() {
+        let bytes: [UInt8] = [0x5C, 0x08, 0x00, 0x00, 0x00, 0x00, 0x3F, 0x3E, 0x00, 0xAF]
+        let r = try! XCTUnwrap(scanOuraUserInfoRecords(tlvBytes: bytes).first)
+        XCTAssertEqual([r.ageYears, r.weightKg, r.sexCode, r.heightCm], [63, 62, 0, 175])
+        XCTAssertFalse(r.isFirmwareDefault)
+    }
+
+    /// The scanner walks a concatenated notification and picks 0x5c out from among other tags.
+    func testScannerFindsTheRecordAmongOtherTags() {
+        let bytes: [UInt8] = [0x43, 0x03, 0x01, 0x02, 0x03]           // some other tag
+            + [0x5C, 0x08, 0x01, 0x00, 0x00, 0x00, 0x28, 0x4B, 0x02, 0xB0]
+            + [0x4A, 0x04, 0x00, 0x00, 0x00, 0x00]                     // and another
+        let recs = scanOuraUserInfoRecords(tlvBytes: bytes)
+        XCTAssertEqual(recs.count, 1)
+        XCTAssertEqual(recs.first?.heightCm, 176)
+    }
+
+    /// A truncated tail must stop the walk, never crash - this runs on every inbound notification.
+    func testTruncatedTailIsIgnoredNotFatal() {
+        XCTAssertEqual(scanOuraUserInfoRecords(tlvBytes: [0x5C, 0x08, 0x01, 0x02]).count, 0)
+        XCTAssertEqual(scanOuraUserInfoRecords(tlvBytes: []).count, 0)
+        XCTAssertEqual(scanOuraUserInfoRecords(tlvBytes: [0x5C]).count, 0)
+    }
 }
