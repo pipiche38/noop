@@ -375,11 +375,16 @@ struct TestCentreView: View {
     /// deliberately NOT on connect: the value encoding is unverified, an automatic write would destroy
     /// the clean before-state the readout depends on, and the connect/bond window is the app's most
     /// fragile path (#1635). Read the strap log for the WRITE line, the 0x20 ACK, and the next 0x5c.
+    ///
+    /// The ACK is NOT the result. Height and weight both acked `result=0` and left `0x5c` untouched,
+    /// while the DOB write moved byte0 — so `result=0` means "shape accepted", never "value stored".
+    /// Only a later `0x5c` read settles it, and there was exactly ONE `0x5c` in 28,218 frames on the
+    /// drain that carried the answer.
     @ViewBuilder
     private var ouraUserInfoWriteBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Oura user-info write (experimental)").font(StrandFont.body)
-            Text("Writes one 0x20 user-info field to the ring and logs what comes back. The ring reports 0x5c as firmware defaults (40 y, 75 kg, sex unset, 176 cm) even though your Oura app profile is correct, and the Oura app never writes it. Whether 0x20 lands in 0x5c is UNKNOWN, and so is the value encoding: try 175 for cm, then 1750 for mm. Age has no setter, only date-of-birth, whose 9-byte layout is unknown, so it is raw hex only.")
+            Text("Writes one 0x20 user-info field to the ring and logs what comes back. 0x20 DOES reach 0x5c: writing DOB on 2026-08-31 moved the payload off the firmware defaults (284b02b0 to 434b02b0) for the first time in five captures. The ENCODING is still open. Height 175 and weight 63 both acked result=0 and moved nothing, so try 1750 (mm) and 6300 (decigrams) next. And byte0 read 67 where that DOB implies 63, so do not trust byte0 as an age. Age has no setter, only date-of-birth, whose 9-byte layout is a candidate, so it is raw hex only. 0x5c is rare: expect the read-back on the NEXT drain, not this connection.")
                 .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
