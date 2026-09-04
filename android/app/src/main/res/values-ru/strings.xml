@@ -240,6 +240,7 @@
     <string name="timeline_min">Мин.</string>
     <string name="timeline_avg">СРЕД</string>
     <string name="timeline_max">Макс.</string>
+    <string name="timeline_active">АКТИВНО</string>
     <string name="timeline_empty_metric">Здесь нет данных: %1$s</string>
     <string name="timeline_nothing_offloaded">Для этого периода пока ничего не выгружено.</string>
     <string name="timeline_other_sources_no_offload">Другие источники не выгружают сырые посекундные данные на устройство.</string>
