@@ -114,7 +114,8 @@ final class TestBundleAssemblerTests: XCTestCase {
     }
 
     /// A ROLLED GENERATION must normalize to the same entry name as the live file, so
-    /// `ouraDiagnosticEntries`' largest-wins rule can ship the generation that actually holds the capture.
+    /// `ouraDiagnosticEntries` can MERGE the generations behind that one name (it used to choose the
+    /// largest between them, which is why a morning export kept shipping the wrong session).
     /// Before this, `hasSuffix(".jsonl")` rejected every `.jsonl.<n>` and a morning export could only ever
     /// carry the live file — a 30-second session, while the night sat in a generation nothing looked at
     /// (measured 2026-08-10).
@@ -262,4 +263,82 @@ final class TestBundleAssemblerTests: XCTestCase {
             [FileExport.BundleEntry(name: "report.txt", data: Data(line.utf8))]).first!.data, encoding: .utf8)!
         XCTAssertTrue(out.contains("\"deviceId\":\"my-whoop\""), "a non-sidecar logical deviceId must be left readable")
     }
+
+    // MARK: - generation merge (the capture-coverage defect)
+
+    /// END-TO-END over real files on disk, reproducing the layout that broke the export on
+    /// 2026-09-05: the live file holds the morning drain (small), while a rolled generation holds the
+    /// previous day's post-reinstall backfill (large). Under the old largest-wins rule the bundle
+    /// shipped the BACKFILL and the night's own drain never left the device — the shipped
+    /// `oura-raw.jsonl` spanned `2026-09-04 10:58 → 12:03 UTC` against a night that ended that
+    /// morning. The merged entry must now contain BOTH, with the morning drain LAST so the cap's
+    /// keep-the-tail trim can never be the thing that drops it.
+    func testOuraDiagnosticEntriesMergesGenerationsNewestLast() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("oura-gen-merge-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let morning = "{\"utc\":1788627494,\"iso\":\"2026-09-05T07:08:14Z\",\"hex\":\"5c08\"}\n"
+        let backfill = String(repeating: "{\"utc\":1788519502,\"iso\":\"2026-09-04T10:58:22Z\"}\n",
+                              count: 50)
+        try morning.write(to: dir.appendingPathComponent("oura-raw-RING1.jsonl"),
+                          atomically: true, encoding: .utf8)
+        try backfill.write(to: dir.appendingPathComponent("oura-raw-RING1.jsonl.1"),
+                           atomically: true, encoding: .utf8)
+
+        let entries = TestBundleAssembler.ouraDiagnosticEntries(directory: dir)
+        XCTAssertEqual(entries.map(\.name), ["oura-raw.jsonl"], "one entry, ring id dropped")
+        let text = try XCTUnwrap(String(data: entries[0].data, encoding: .utf8))
+        XCTAssertTrue(text.contains("2026-09-04T10:58:22Z"), "older generation must still be present")
+        XCTAssertTrue(text.hasSuffix(morning), "the newest capture must be LAST — the cap keeps the tail")
+        XCTAssertLessThan(try XCTUnwrap(text.range(of: "2026-09-04T10:58:22Z")).lowerBound,
+                          try XCTUnwrap(text.range(of: "2026-09-05T07:08:14Z")).lowerBound,
+                          "chronological order")
+    }
+
+    /// A generation whose last write did not end in a newline must not splice its final record onto
+    /// the next generation's first one — that would produce a line parsing as neither.
+    func testOuraDiagnosticEntriesInsertsANewlineBetweenGenerations() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("oura-gen-nl-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try "{\"a\":1}".write(to: dir.appendingPathComponent("oura-raw-R.jsonl.1"),   // NO trailing newline
+                              atomically: true, encoding: .utf8)
+        try "{\"b\":2}\n".write(to: dir.appendingPathComponent("oura-raw-R.jsonl"),
+                                 atomically: true, encoding: .utf8)
+
+        let entries = TestBundleAssembler.ouraDiagnosticEntries(directory: dir)
+        let text = try XCTUnwrap(String(data: entries[0].data, encoding: .utf8))
+        XCTAssertEqual(text, "{\"a\":1}\n{\"b\":2}\n")
+        XCTAssertEqual(text.split(separator: "\n").count, 2, "two whole lines, nothing spliced")
+    }
+
+    /// Every merged line must survive the redact + cap pass the bundle actually applies, and the
+    /// newest record must be the one that survives a cap far smaller than the merged size.
+    func testMergedSidecarKeepsTheNewestRecordsUnderTheCap() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("oura-gen-cap-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try String(repeating: "{\"old\":1}\n", count: 4000)
+            .write(to: dir.appendingPathComponent("oura-raw-R.jsonl.1"), atomically: true, encoding: .utf8)
+        try String(repeating: "{\"new\":1}\n", count: 100)
+            .write(to: dir.appendingPathComponent("oura-raw-R.jsonl"), atomically: true, encoding: .utf8)
+
+        let merged = TestBundleAssembler.ouraDiagnosticEntries(directory: dir)
+        let (capped, truncated) = TestBundleAssembler.capEntries(merged, capBytes: 2_000)
+        XCTAssertTrue(truncated)
+        let text = try XCTUnwrap(String(data: capped[0].data, encoding: .utf8))
+        XCTAssertTrue(text.contains("{\"new\":1}"), "the newest records must survive the cap")
+        // Every kept line must be whole — the front trim snaps to a line boundary, so the partial
+        // record the raw byte-count tail would otherwise start on is dropped.
+        for line in text.split(separator: "\n") {
+            XCTAssertTrue(line.hasPrefix("{") && line.hasSuffix("}"), "no partial line: \(line)")
+        }
+    }
+
 }
