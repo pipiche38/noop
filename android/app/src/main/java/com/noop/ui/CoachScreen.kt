@@ -961,11 +961,14 @@ private fun CoachPrimaryButton(label: String, enabled: Boolean, onClick: () -> U
  * K4: The composer row with a mic button (on-device voice input) between the text field and Send.
  * Mirrors the iOS `CoachView.composer` + `micButton` twin. The mic button:
  *  - requests RECORD_AUDIO at runtime on first tap (via [rememberLauncherForActivityResult]),
- *  - starts/stops [CoachVoiceInput] (Android platform SpeechRecognizer, EXTRA_PREFER_OFFLINE),
+ *  - starts/stops [CoachVoiceInput], which uses `createOnDeviceSpeechRecognizer` behind an
+ *    `isOnDeviceRecognitionAvailable` gate (API 31+); below that the button is not composed at all,
  *  - streams the partial transcript into the text field live,
  *  - on stop, appends the finalized transcript to the draft (not replace, so it composes with
  *    typed text).
- * Only the resulting TEXT ever reaches the AI provider — no new network path, no audio egress.
+ * Only the resulting TEXT ever reaches the AI provider — no new network path, no audio egress. That
+ * is a guarantee rather than a preference: `createOnDeviceSpeechRecognizer` cannot fall back to a
+ * server, where the `EXTRA_PREFER_OFFLINE` this line used to name was a hint the platform could ignore.
  */
 @Composable
 private fun MicComposerRow(
