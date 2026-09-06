@@ -2727,4 +2727,10 @@
     <string name="coach_voice_error_unavailable">Rozpoznawanie mowy na urządzeniu jest niedostępne na tym urządzeniu lub dla tego języka.</string>
     <string name="coach_voice_unavailable">Rozpoznawanie mowy na urządzeniu nie jest dostępne na tym urządzeniu lub w tym języku.</string>
     <string name="coach_voice_permission_denied">Odmowa uprawnień do mikrofonu. Włącz je w Ustawieniach, aby używać wprowadzania głosowego.</string>
+    <string name="units_settings_blurb">Wybierz osobno jednostki pomiarów ciała i dystansu treningu. Dane są zawsze przechowywane tak samo; te ustawienia zmieniają tylko sposób wyświetlania.</string>
+    <string name="units_body_measurements">Pomiary ciała</string>
+    <string name="units_exercise_distance_pace">Dystans i tempo treningu</string>
+    <string name="units_kilometres">Kilometry</string>
+    <string name="units_miles">Mile</string>
+    <string name="units_follow_body">Jak pomiary ciała</string>
 </resources>

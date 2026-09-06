@@ -1087,6 +1087,11 @@ final class AICoachEngine: ObservableObject {
     func recentWorkoutsBlock(limit: Int = 6) async -> String {
         let rows = await repo.workoutRows(days: 30) // newest first
         guard !rows.isEmpty else { return "Recent workouts: none recorded in the last 30 days." }
+        let bodySystem = UnitSystem(
+            rawValue: UserDefaults.standard.string(forKey: UnitPrefs.systemKey) ?? "") ?? .metric
+        let distanceSystem = UnitPrefs.resolveDistance(
+            system: bodySystem,
+            override: UserDefaults.standard.string(forKey: UnitPrefs.distanceSystemKey) ?? "")
         var lines = ["Recent workouts (newest first):"]
         for w in rows.prefix(limit) {
             var parts = ["  \(dateString(w.startTs)) \(w.sport)"]
@@ -1094,7 +1099,9 @@ final class AICoachEngine: ObservableObject {
             if let s = w.strain { parts.append("effort \(String(format: "%.1f", s))") }
             if let hr = w.avgHr { parts.append("avg HR \(hr)") }
             if let kcal = w.energyKcal { parts.append("\(Int(kcal.rounded())) kcal") }
-            if let dist = w.distanceM { parts.append("\(String(format: "%.1f", dist / 1000)) km") }
+            if let dist = w.distanceM {
+                parts.append(UnitFormatter.distanceFromMeters(dist, system: distanceSystem))
+            }
             lines.append(parts.joined(separator: ", "))
         }
         return lines.joined(separator: "\n")

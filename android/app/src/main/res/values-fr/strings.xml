@@ -2722,4 +2722,10 @@
     <string name="coach_voice_error_unavailable">La reconnaissance vocale sur l\'appareil n\'est pas disponible sur cet appareil ou pour cette langue.</string>
     <string name="coach_voice_unavailable">La reconnaissance vocale sur l\'appareil n\'est pas disponible sur cet appareil ou pour cette langue.</string>
     <string name="coach_voice_permission_denied">Autorisation du microphone refusée. Activez-la dans les Paramètres pour utiliser la saisie vocale.</string>
+    <string name="units_settings_blurb">Choisissez séparément les unités des mensurations et de la distance d’exercice. Les données sont toujours stockées de la même façon ; ces réglages ne changent que leur affichage.</string>
+    <string name="units_body_measurements">Mensurations</string>
+    <string name="units_exercise_distance_pace">Distance et allure d’exercice</string>
+    <string name="units_kilometres">Kilomètres</string>
+    <string name="units_miles">Miles</string>
+    <string name="units_follow_body">Selon les mensurations</string>
 </resources>

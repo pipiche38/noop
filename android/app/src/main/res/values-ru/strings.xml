@@ -2606,4 +2606,10 @@
     <string name="l10n_settings_screen_bar_size_2304bfbb">Размер панели</string>
     <string name="l10n_settings_screen_bar_transparency_3f648fbb">Прозрачность панели</string>
     <string name="l10n_settings_screen_how_see_through_the_bar_is_ddb0c208">Насколько панель прозрачна. На самом слабом шаге её контур всё ещё виден, поэтому её всегда можно найти.</string>
+    <string name="units_settings_blurb">Выберите единицы для параметров тела и дистанции тренировки отдельно. Данные всегда хранятся одинаково; эти настройки меняют только отображение.</string>
+    <string name="units_body_measurements">Параметры тела</string>
+    <string name="units_exercise_distance_pace">Дистанция и темп тренировки</string>
+    <string name="units_kilometres">Километры</string>
+    <string name="units_miles">Мили</string>
+    <string name="units_follow_body">Как для параметров тела</string>
 </resources>

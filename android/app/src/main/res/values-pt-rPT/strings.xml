@@ -2715,4 +2715,10 @@
     <string name="coach_voice_error_unavailable">O reconhecimento de voz no dispositivo não está disponível neste dispositivo ou idioma.</string>
     <string name="coach_voice_unavailable">O reconhecimento de voz no dispositivo não está disponível neste dispositivo ou idioma.</string>
     <string name="coach_voice_permission_denied">Permissão de microfone negada. Ative-a nas Configurações para usar a entrada de voz.</string>
+    <string name="units_settings_blurb">Escolha separadamente as unidades para medidas corporais e distância de exercício. Os dados são sempre armazenados da mesma forma; estas definições alteram apenas a apresentação.</string>
+    <string name="units_body_measurements">Medidas corporais</string>
+    <string name="units_exercise_distance_pace">Distância e ritmo do exercício</string>
+    <string name="units_kilometres">Quilómetros</string>
+    <string name="units_miles">Milhas</string>
+    <string name="units_follow_body">Como medidas corporais</string>
 </resources>
