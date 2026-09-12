@@ -6,7 +6,7 @@ import XCTest
 /// no default CI job compiles — this is the only automated cover the rule has.
 final class OuraSidecarGenerationsTests: XCTestCase {
 
-    private let kinds = ["raw", "spo2", "motion", "activity"]
+    private let kinds = ["raw", "cva-ppg", "motion", "activity"]
 
     // MARK: - classify
 
@@ -70,9 +70,9 @@ final class OuraSidecarGenerationsTests: XCTestCase {
 
     func testMergePlanOrdersEntriesByKindsNotByDiscovery() {
         let plan = OuraSidecarGenerations.mergePlan(
-            files: [("oura-motion-A.jsonl", 1), ("oura-raw-A.jsonl", 1), ("oura-spo2-A.jsonl", 1)],
+            files: [("oura-motion-A.jsonl", 1), ("oura-raw-A.jsonl", 1), ("oura-cva-ppg-A.jsonl", 1)],
             kinds: kinds, ceilingBytes: 1_000)
-        XCTAssertEqual(plan.map(\.entryName), ["oura-raw.jsonl", "oura-spo2.jsonl", "oura-motion.jsonl"])
+        XCTAssertEqual(plan.map(\.entryName), ["oura-raw.jsonl", "oura-cva-ppg.jsonl", "oura-motion.jsonl"])
     }
 
     func testMergePlanSkipsKindsWithNoFiles() {

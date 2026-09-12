@@ -119,7 +119,7 @@ final class TestBundleAssemblerTests: XCTestCase {
                 forFile: "oura-raw-oura-2H3B2405003655" + suffix), "oura-raw.jsonl", suffix)
         }
         XCTAssertEqual(TestBundleAssembler.normalizedOuraEntryName(
-            forFile: "oura-spo2-oura-2H3B2405003655.jsonl.3"), "oura-spo2.jsonl")
+            forFile: "oura-cva-ppg-oura-2H3B2405003655.jsonl.3"), "oura-cva-ppg.jsonl")
         // A non-numeric or empty tail is NOT a generation — those are someone else's files, not ours.
         XCTAssertNil(TestBundleAssembler.normalizedOuraEntryName(
             forFile: "oura-raw-oura-2H3B2405003655.jsonl.bak"))
@@ -163,27 +163,29 @@ final class TestBundleAssemblerTests: XCTestCase {
     }
 
     /// The bug this allocation exists to prevent (measured on `noop-master-iOS-v9.3.1-260809-0716.zip`):
-    /// proportional-to-size handed 53.9 % of the budget to the bulk SpO2 dump and left the raw wire capture
+    /// proportional-to-size handed 53.9 % of the budget to a bulk sidecar dump and left the raw wire capture
     /// — the only sidecar a protocol fact can be re-derived from — with 1.9 %, i.e. 8 min of an 8.4 h night.
     /// Max-min fair keeps a modest stream WHOLE and takes the bytes off the stream that is merely bulky.
+    /// (The bulky neighbour is modelled here as the CVA-PPG dump — the measured case was a SpO2 research
+    /// sidecar that this branch does not carry; the allocation rule is kind-agnostic.)
     func testSmallHighValueSidecarSurvivesABulkyNeighbour() {
         let report = FileExport.BundleEntry(name: "report.txt", data: Data("small".utf8))
         // Mirrors the real shape: one 40 MB bulk dump beside a 2 MB wire capture, 20 MB of room.
-        let spo2 = FileExport.BundleEntry(name: "oura-spo2.jsonl",
+        let bulk = FileExport.BundleEntry(name: "oura-cva-ppg.jsonl",
                                           data: Data(String(repeating: "s\n", count: 20 * 1024 * 1024).utf8))
         let raw = FileExport.BundleEntry(name: "oura-raw.jsonl",
                                          data: Data(String(repeating: "r\n", count: 1024 * 1024).utf8))
         let cap = 20 * 1024 * 1024
-        let (capped, truncated) = TestBundleAssembler.capEntries([report, spo2, raw], capBytes: cap)
+        let (capped, truncated) = TestBundleAssembler.capEntries([report, bulk, raw], capBytes: cap)
         XCTAssertTrue(truncated)
         XCTAssertLessThanOrEqual(capped.reduce(0) { $0 + $1.data.count }, cap)
         // The wire capture is under its ~10 MB fair share, so it ships WHOLE — not scaled down to ~9 % of
         // the budget the way size-proportional splitting would have left it.
         XCTAssertEqual(capped.first { $0.name == "oura-raw.jsonl" }?.data.count, raw.data.count)
         // Its surplus rolls forward: the bulk dump gets everything the raw capture did not need.
-        let cappedSpo2 = capped.first { $0.name == "oura-spo2.jsonl" }!
-        XCTAssertLessThan(cappedSpo2.data.count, spo2.data.count)
-        XCTAssertGreaterThan(cappedSpo2.data.count, cap - raw.data.count - 1024)
+        let cappedBulk = capped.first { $0.name == "oura-cva-ppg.jsonl" }!
+        XCTAssertLessThan(cappedBulk.data.count, bulk.data.count)
+        XCTAssertGreaterThan(cappedBulk.data.count, cap - raw.data.count - 1024)
     }
 
     func testFairAllowancesIsWaterFillingAndNeverBreachesBudget() {
