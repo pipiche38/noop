@@ -444,7 +444,7 @@ struct TestCentreView: View {
     private var ouraUserInfoWriteBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Oura user-info write (experimental)").font(StrandFont.body)
-            Text("Writes one 0x20 user-info field to the ring and logs what comes back. 0x20 DOES reach 0x5c: writing DOB on 2026-08-31 moved the payload off the firmware defaults (284b02b0 to 434b02b0) for the first time in five captures. The ENCODING is still open. Height 175 and weight 63 both acked result=0 and moved nothing, so try 1750 (mm) and 6300 (decigrams) next. And byte0 read 67 where that DOB implies 63, so do not trust byte0 as an age. Age has no setter, only date-of-birth, whose 9-byte layout is a candidate, so it is raw hex only. 0x5c is rare: expect the read-back on the NEXT drain, not this connection. Tested only on Gen 3 so far — Gen 5 validation is open.")
+            Text("Writes one 0x20 user-info field to the ring and logs what comes back. 0x20 DOES reach 0x5c: writing DOB on 2026-08-31 moved the payload off the firmware defaults (284b02b0 to 434b02b0) for the first time in five captures. The ENCODING is still open. Height 175 and weight 63 both acked result=0 and moved nothing, so try 1750 (mm) and 6300 (decigrams) next. And byte0 read 67 where that DOB implies 63, so do not trust byte0 as an age. Age has no setter, only date-of-birth, whose 9-byte layout is a candidate, so it is raw hex only. 0x5c is rare: expect the read-back on the NEXT drain, not this connection.")
                 .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
