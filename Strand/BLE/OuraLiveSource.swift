@@ -1609,6 +1609,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Returns false (and writes nothing) if the link is not ready, so the caller can say so rather than
     /// silently appearing to have written. The value bytes are logged verbatim: this is a write to the
     /// ring's own config, and a strap log that does not say exactly what went out is useless afterwards.
+    @discardableResult
     func writeUserInfo(field: OuraUserInfoField, value: [UInt8]) -> Bool {
         guard peripheral != nil, writeCharacteristic != nil else {
             log("Oura: 0x20 user-info write SKIPPED - no connected ring / write characteristic")
@@ -1635,6 +1636,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// also sends is guaranteed to log a fresh line — the connect-time SpO2/real_steps auto-probe (or an
     /// earlier manual call) may have already consumed `logFeatureStatus`'s once-per-connection dedup for
     /// this exact feature id.
+    @discardableResult
     func writeFeatureMode(feature: UInt8, mode: UInt8) -> Bool {
         guard peripheral != nil, writeCharacteristic != nil else {
             log("Oura: feature-mode write SKIPPED - no connected ring / write characteristic")
@@ -2993,6 +2995,7 @@ public enum OuraKeyStore {
 
     /// Store (or replace) the 16-byte install key for `deviceId`. A wrong-length key is rejected (no
     /// partial key is ever stored, so a later read can't return a malformed key).
+    @discardableResult
     public static func save(_ key: Data, deviceId: String) -> Bool {
         guard key.count == keyLength else { return false }
         SecItemDelete(baseQuery(deviceId: deviceId) as CFDictionary)
