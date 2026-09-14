@@ -15,6 +15,7 @@ import SwiftUI
 import StrandDesign
 import WhoopStore
 import StrandAnalytics
+import OuraProtocol
 
 struct LiquidTodayView: View {
     @AppStorage(DayCycleMode.storageKey) private var dayCycleModeRaw = DayCycleMode.sleepOnset.rawValue
@@ -2527,8 +2528,25 @@ extension LiquidTodayView {
         /// A reading from the current link.
         case charge(pct: Double, charging: Bool)
 
-        static func resolve(connected: Bool, batteryPct: Double?, charging: Bool?) -> StrapBatteryDisplay {
+        /// `activeIsWhoop` picks WHICH device's signals the other arguments are read from (#2208): the
+        /// WHOOP's `batteryPct` / `charging`, or the ring's `ouraBatteryPct` / `ouraWearState`. `LiveState`
+        /// is one object both sources write into, and `connected` is set by whichever source is live, so
+        /// with a ring active `connected` is the RING's link while `batteryPct` is still the strap's last
+        /// charge — which drew the strap's % under the ring. The number comes through
+        /// `LiveConsoleReadout.batteryPercent`, the same seam as the Live Console, Devices and the widget:
+        /// a non-WHOOP active device never falls back to the WHOOP's charge. The WHOOP path keeps its
+        /// unrounded % so the arc and the truth table below are byte-for-byte what they were.
+        static func resolve(activeIsWhoop: Bool, connected: Bool, batteryPct: Double?, charging: Bool?,
+                            ringPct: Int?, ringWear: OuraWearState?) -> StrapBatteryDisplay {
             guard connected else { return .offline }
+            guard activeIsWhoop else {
+                let ringCharging = ringWear == .charging
+                guard let pct = LiveConsoleReadout.batteryPercent(activeIsWhoop: false, whoopPct: batteryPct,
+                                                                  ringPct: ringPct) else {
+                    return .pending(charging: ringCharging)
+                }
+                return .charge(pct: Double(pct), charging: ringCharging)
+            }
             guard let pct = batteryPct else { return .pending(charging: charging == true) }
             return .charge(pct: pct, charging: charging == true)
         }
@@ -2649,16 +2667,22 @@ private struct LiquidBatteryButton: View {
         #if DEBUG
         if DemoSyncHarness.active {
             return .resolve(
+                activeIsWhoop: true,
                 connected: true,
                 batteryPct: DemoSyncHarness.batteryPercent,
-                charging: DemoSyncHarness.charging
+                charging: DemoSyncHarness.charging,
+                ringPct: nil,
+                ringWear: nil
             )
         }
         #endif
         return .resolve(
+            activeIsWhoop: live.activeIsWhoop,
             connected: live.connected,
             batteryPct: live.batteryPct,
-            charging: live.charging
+            charging: live.charging,
+            ringPct: live.ouraBatteryPct,
+            ringWear: live.ouraWearState
         )
     }
 
@@ -2870,8 +2894,23 @@ private struct LiquidSyncStatusRow: View {
 /// The strap-battery readout inside the Data Sources card. Owns LiveState; display-only.
 private struct LiquidStrapBatteryRow: View {
     @EnvironmentObject var live: LiveState
+
+    /// The ACTIVE device's charge, or nil to show nothing (#2208). `connected` is whichever source is
+    /// live, and `batteryPct` is the WHOOP's and is never cleared, so under a streaming ring the old
+    /// `connected && batteryPct` gate passed on the strap's stale %. Same seam as the Live Console.
+    private var activePct: Int? {
+        guard live.connected else { return nil }
+        return LiveConsoleReadout.batteryPercent(activeIsWhoop: live.activeIsWhoop,
+                                                 whoopPct: live.batteryPct, ringPct: live.ouraBatteryPct)
+    }
+
+    /// The WHOOP's `charging` flag is the strap's BATTERY_LEVEL event; the ring's is its wear state.
+    private var charging: Bool {
+        live.activeIsWhoop ? live.charging == true : live.ouraWearState == .charging
+    }
+
     var body: some View {
-        if live.connected, let pct = live.batteryPct {
+        if let pct = activePct {
             HStack {
                 Text("Strap battery").font(StrandFont.subhead).foregroundStyle(StrandPalette.textSecondary)
                 Spacer()
@@ -2884,9 +2923,9 @@ private struct LiquidStrapBatteryRow: View {
 
     /// "87%" plus a trailing "· Charging" (#972) or "· ~9 days left" runtime (#992), matching the Settings /
     /// Mac / Android pill and the classic Today badge.
-    private func batteryText(pct: Double) -> String {
-        let base = "\(Int(pct.rounded()))%"
-        if live.charging == true { return "\(base) · \(String(localized: "Charging"))" }
+    private func batteryText(pct: Int) -> String {
+        let base = "\(pct)%"
+        if charging { return "\(base) · \(String(localized: "Charging"))" }
         if let est = estimateText { return "\(base) · \(est)" }
         return base
     }
@@ -2894,8 +2933,9 @@ private struct LiquidStrapBatteryRow: View {
     /// #992: the v8 Liquid redesign dropped the "~X days left" estimate the classic Today showed (#713).
     /// Reproduced verbatim from `TodayView.estimateText`: under 48 h show hours, at two days or more round to
     /// days; nil (no banked discharge yet, or charging) hides it, so the row only ever shows an estimate we trust.
+    /// WHOOP-only: the estimate is fitted over the strap's banked SoC samples (#2208).
     private var estimateText: String? {
-        guard live.charging != true, let est = live.batteryEstimate else { return nil }
+        guard live.activeIsWhoop, live.charging != true, let est = live.batteryEstimate else { return nil }
         let hours = est.hoursRemaining
         guard hours.isFinite, hours > 0 else { return nil }
         if hours < 48 {

@@ -330,6 +330,13 @@ fun TodayScreen(
 ) {
     val today by viewModel.today.collectAsStateWithLifecycle()
     val alert by viewModel.healthAlert.collectAsStateWithLifecycle()
+    // #2208: which device the shared LiveState describes, and the ring's own charge. `live.batteryPct` is
+    // the WHOOP's and is never cleared, while `live.connected` is set by whichever source is live, so under
+    // a streaming ring the old `connected && batteryPct` gate drew the strap's stale charge on Today. Same
+    // seam as the Live Console, Devices and the widget (#2075): a non-WHOOP active device never falls back
+    // to the strap's number.
+    val activeIsWhoop by viewModel.activeIsWhoop.collectAsStateWithLifecycle()
+    val ouraBatteryPct by viewModel.ouraBatteryPct.collectAsStateWithLifecycle()
     val days by viewModel.recentDays.collectAsStateWithLifecycle()
     val activeDayCycle by viewModel.activeDayCycle.collectAsStateWithLifecycle()
     val spo2CandidateByDay by viewModel.spo2CandidateByDay.collectAsStateWithLifecycle()
@@ -1391,7 +1398,10 @@ fun TodayScreen(
                 dayTitle = dayTitle,
                 humanDate = humanDate,
                 selectedDay = selectedDay,
-                batteryPct = if (liveSnap.connected) liveSnap.batteryPct else null,
+                // #2208: the ACTIVE device's charge, through the shared seam; null shows the empty ring.
+                batteryPct = if (liveSnap.connected)
+                    LiveConsoleReadout.batteryPercent(activeIsWhoop, liveSnap.batteryPct, ouraBatteryPct)?.toDouble()
+                else null,
                 backfilling = liveSnap.backfilling,
                 syncChunksThisSession = liveSnap.syncChunksThisSession,
                 lastSyncAt = liveSnap.lastSyncAt,
@@ -1897,12 +1907,14 @@ fun TodayScreen(
             item { AutoWorkoutNudgeCard(viewModel = viewModel, days = days) }
         }
         // Strap battery only while the link is up AND a real reading exists, a stale % from a
-        // dropped connection must not present as live (#159).
+        // dropped connection must not present as live (#159). This pill sits inside the WHOOP-labelled
+        // source row, so it is WHOOP state only: with a ring active, `connected` is the RING's link and the
+        // strap's % is stale, so the row shows nothing rather than the ring's charge under "WHOOP" (#2208).
         item {
             TodaySourcesSection(
                 footer,
-                strapBatteryPct = if (liveSnap.connected) liveSnap.batteryPct?.roundToInt() else null,
-                strapBatteryEstimate = if (liveSnap.connected) batteryEstimateText else null,
+                strapBatteryPct = if (liveSnap.connected && activeIsWhoop) liveSnap.batteryPct?.roundToInt() else null,
+                strapBatteryEstimate = if (liveSnap.connected && activeIsWhoop) batteryEstimateText else null,
                 expanded = sourcesExpanded,
                 onToggle = { sourcesExpanded = !sourcesExpanded },
             )

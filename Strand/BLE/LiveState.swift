@@ -124,6 +124,20 @@ public final class LiveState: ObservableObject {
     /// That is #2075, where a ring on 93% displayed the strap's 72%. Nil when no ring has reported.
     @Published public var ouraBatteryPct: Int? = nil
 
+    /// Whether the ACTIVE registry device is a WHOOP, published beside the state it qualifies (#2208).
+    ///
+    /// `LiveState` is one object every live source writes into, so a reader has to ask which device a
+    /// field describes before drawing it — `batteryPct` is the WHOOP's, `ouraBatteryPct` the ring's.
+    /// The Live Console resolves that from `AppModel.deviceRegistry` (#2075), but the Today leaves that
+    /// draw the battery observe ONLY this object, on purpose: `AppModel` republishes at live-HR rate
+    /// (`bpm`), and a 1 Hz re-render of the whole Today scroll is the scroll stutter those leaves were
+    /// split off to avoid. So the answer is carried here, set by `SourceCoordinator` from the same
+    /// `LiveConsoleReadout.activeIsWhoop` rule the console uses, on every active-device change. Twin of
+    /// Android's `AppViewModel.activeIsWhoop` flow, which exists for the same reason (Compose needs
+    /// something to recompose on). Defaults to true, the console's own fail-open, so a build where the
+    /// coordinator has not wired up yet draws exactly what it drew before.
+    @Published public var activeIsWhoop: Bool = true
+
     // MARK: - Battery runtime estimate (#713)
 
     /// Rolling buffer of `(unix-seconds, SoC%)` battery readings banked from the live link, the twin of

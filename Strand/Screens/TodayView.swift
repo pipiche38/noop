@@ -3,6 +3,7 @@ import StrandDesign
 import StrandAnalytics
 import WhoopStore
 import WhoopProtocol
+import OuraProtocol
 import Foundation
 
 // MARK: - Control Center (the home dashboard), HomeDensity rewrite
@@ -5749,6 +5750,20 @@ private struct StrapSyncRow: View {
 private struct StrapBatteryRow: View {
     @EnvironmentObject private var live: LiveState
 
+    /// The ACTIVE device's charge, or nil to show nothing (#2208). `connected` is whichever source is
+    /// live, and `batteryPct` is the WHOOP's and is never cleared, so under a streaming ring the old
+    /// `connected && batteryPct` gate passed on the strap's stale %. Same seam as the Live Console.
+    private var activePct: Int? {
+        guard live.connected else { return nil }
+        return LiveConsoleReadout.batteryPercent(activeIsWhoop: live.activeIsWhoop,
+                                                 whoopPct: live.batteryPct, ringPct: live.ouraBatteryPct)
+    }
+
+    /// The WHOOP's `charging` flag is the strap's BATTERY_LEVEL event; the ring's is its wear state.
+    private var charging: Bool {
+        live.activeIsWhoop ? live.charging == true : live.ouraWearState == .charging
+    }
+
     /// Battery tint, same thresholds as the menu-bar stat (MenuBarContent.batteryTone).
     private func tint(_ pct: Double) -> Color {
         switch pct {
@@ -5760,7 +5775,7 @@ private struct StrapBatteryRow: View {
 
     /// Level-banded battery glyph; the bolt variant when the strap reports charging.
     private func symbol(_ pct: Double) -> String {
-        if live.charging == true { return "battery.100.bolt" }
+        if charging { return "battery.100.bolt" }
         switch pct {
         case ..<13: return "battery.0"
         case ..<38: return "battery.25"
@@ -5773,8 +5788,9 @@ private struct StrapBatteryRow: View {
     /// #713: "~X left" runtime from `live.batteryEstimate`. Under 48 hours we show hours so a nearly-flat
     /// strap reads honestly ("~6h left"); at two days or more we round to days ("~9 days left"). nil (no
     /// banked discharge yet, or charging) hides it, so the badge only ever shows an estimate we trust.
+    /// WHOOP-only: the estimate is fitted over the strap's banked SoC samples (#2208).
     private var estimateText: String? {
-        guard live.charging != true, let est = live.batteryEstimate else { return nil }
+        guard live.activeIsWhoop, live.charging != true, let est = live.batteryEstimate else { return nil }
         let hours = est.hoursRemaining
         guard hours.isFinite, hours > 0 else { return nil }
         if hours < 48 {
@@ -5787,7 +5803,8 @@ private struct StrapBatteryRow: View {
     }
 
     var body: some View {
-        if live.connected, let pct = live.batteryPct {
+        if let whole = activePct {
+            let pct = Double(whole)
             Divider().overlay(StrandPalette.hairline)
             HStack(spacing: 10) {
                 SourceBadge("Strap battery", tint: tint(pct))
@@ -5796,7 +5813,7 @@ private struct StrapBatteryRow: View {
                     Image(systemName: symbol(pct))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(tint(pct))
-                    Text("\(Int(pct.rounded()))%")
+                    Text("\(whole)%")
                         .font(StrandFont.captionNumber)
                         .foregroundStyle(StrandPalette.textSecondary)
                     // The runtime estimate sits beside the %, dimmer, only when we have a trusted one.
@@ -5810,7 +5827,7 @@ private struct StrapBatteryRow: View {
                     }
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Strap battery \(Int(pct.rounded())) percent\(live.charging == true ? ", charging" : "")\(estimateText.map { ", \($0)" } ?? "")")
+                .accessibilityLabel("Strap battery \(whole) percent\(charging ? ", charging" : "")\(estimateText.map { ", \($0)" } ?? "")")
             }
         }
     }
