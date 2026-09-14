@@ -105,8 +105,17 @@ public struct MenuBarContent: View {
             : live.connected ? String(localized: "CONNECTED") : String(localized: "OFFLINE")
     }
 
+    /// The ACTIVE device's charge while its link is up, or nil (#2208). `batteryPct` is the WHOOP's and
+    /// is never cleared, and this stat read it with no `connected` gate, so it kept asserting the strap's
+    /// last % under a ring and after the link dropped. Same seam as the Live Console.
+    private var activePct: Int? {
+        guard live.connected else { return nil }
+        return LiveConsoleReadout.batteryPercent(activeIsWhoop: live.activeIsWhoop,
+                                                 whoopPct: live.batteryPct, ringPct: live.ouraBatteryPct)
+    }
+
     private var batteryTone: StrandTone {
-        guard let pct = live.batteryPct else { return .neutral }
+        guard let pct = activePct else { return .neutral }
         switch pct {
         case ..<15: return .critical
         case ..<35: return .warning
@@ -212,8 +221,8 @@ public struct MenuBarContent: View {
         HStack(spacing: 0) {
             statCell(
                 "BATTERY",
-                live.batteryPct.map { "\(Int($0.rounded()))%" } ?? "—",
-                tint: live.batteryPct == nil ? StrandPalette.textPrimary : toneColor(batteryTone)
+                activePct.map { "\($0)%" } ?? "—",
+                tint: activePct == nil ? StrandPalette.textPrimary : toneColor(batteryTone)
             )
             cellDivider
             statCell(

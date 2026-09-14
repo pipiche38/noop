@@ -535,6 +535,26 @@ struct BrandMark: View {
 /// list + detail) does not re-render on the ~1 Hz HR / frame stream.
 private struct SidebarStatus: View {
     @EnvironmentObject var live: LiveState
+
+    /// The ACTIVE device's charge while its link is up, or nil (#2208). This line used to read
+    /// `batteryPct` with no `connected` gate at all, and that field is the WHOOP's and is never cleared:
+    /// so "Strap not connected" became unreachable the first time a strap ever connected, and the
+    /// strap's last % stood in for a ring, for a dropped link, for nothing connected to anything. Same
+    /// seam as the Live Console: a non-WHOOP active device never falls back to the strap's number.
+    private var activePct: Int? {
+        guard live.connected else { return nil }
+        return LiveConsoleReadout.batteryPercent(activeIsWhoop: live.activeIsWhoop,
+                                                 whoopPct: live.batteryPct, ringPct: live.ouraBatteryPct)
+    }
+
+    /// Three honest states: no link, a link with no reading yet (an em dash, as the console draws it),
+    /// and a reading from the current link.
+    private var batteryLine: String {
+        guard live.connected else { return String(localized: "Strap not connected") }
+        guard let pct = activePct else { return "\(String(localized: "Battery")) —" }
+        return String(localized: "Battery \(pct)%")
+    }
+
     var body: some View {
         HStack(spacing: 9) {
             Circle()
@@ -545,7 +565,7 @@ private struct SidebarStatus: View {
                 Text(statusText)
                     .font(StrandFont.rounded(12, weight: .medium))
                     .foregroundStyle(StrandPalette.textPrimary)
-                Text(live.batteryPct.map { String(localized: "Battery \(Int($0))%") } ?? String(localized: "Strap not connected"))
+                Text(batteryLine)
                     .font(StrandFont.rounded(11))
                     .foregroundStyle(StrandPalette.textTertiary)
             }
