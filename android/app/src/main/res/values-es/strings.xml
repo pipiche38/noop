@@ -2782,4 +2782,11 @@
     <string name="l10n_app_changelog_a_stress_screen_that_keeps_up_f7ec3f36">Una pantalla de estrés que no se queda atrás, lecturas del WHOOP 5 en las unidades que envía la banda, y un anillo que deja de repetirse</string>
     <string name="l10n_settings_screen_ai_coach_130c3eab">Coach de IA</string>
     <string name="l10n_app_changelog_a_gym_log_book_on_your_e0f00272">Un cuaderno de gimnasio en la muñeca, un Coach que puedes desactivar y un atajo para sincronizar la banda</string>
+    <string name="l10n_live_screen_reconnect_ring_3111ab8f">Reconectar anillo</string>
+    <string name="l10n_live_screen_ring_not_connected_c2418ea8">Anillo no conectado.</string>
+    <string name="l10n_live_screen_connecting_to_the_ring_af2900ea">Conectando con el anillo…</string>
+    <string name="l10n_live_screen_connected_authenticating_fa9da040">Conectado, autenticando…</string>
+    <string name="l10n_live_screen_connected_waiting_for_live_heart_rate_01d216bb">Conectado, esperando la frecuencia cardíaca en vivo.</string>
+    <string name="l10n_live_screen_live_heart_rate_is_flowing_from_f7f6c4fe">La frecuencia cardíaca en vivo llega desde el anillo.</string>
+    <string name="l10n_live_screen_reconnect_drops_the_current_link_if_afc27801">Reconectar corta el enlace actual, si lo hay, y vuelve a conectar con el anillo. Para emparejar o cambiar de banda, abre Dispositivos.</string>
 </resources>

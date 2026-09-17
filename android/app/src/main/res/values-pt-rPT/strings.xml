@@ -2774,4 +2774,11 @@
     <string name="l10n_app_changelog_a_stress_screen_that_keeps_up_f7ec3f36">Um ecrã de stress que acompanha, leituras do WHOOP 5 nas unidades que a pulseira envia, e um anel que deixa de se repetir</string>
     <string name="l10n_settings_screen_ai_coach_130c3eab">Treinador de IA</string>
     <string name="l10n_app_changelog_a_gym_log_book_on_your_e0f00272">Um caderno de ginásio no pulso, um Coach que podes desligar, e um atalho para sincronizar a pulseira</string>
+    <string name="l10n_live_screen_reconnect_ring_3111ab8f">Voltar a ligar o anel</string>
+    <string name="l10n_live_screen_ring_not_connected_c2418ea8">Anel não ligado.</string>
+    <string name="l10n_live_screen_connecting_to_the_ring_af2900ea">A ligar ao anel…</string>
+    <string name="l10n_live_screen_connected_authenticating_fa9da040">Ligado, a autenticar…</string>
+    <string name="l10n_live_screen_connected_waiting_for_live_heart_rate_01d216bb">Ligado, aguardando a frequência cardíaca em direto.</string>
+    <string name="l10n_live_screen_live_heart_rate_is_flowing_from_f7f6c4fe">A frequência cardíaca em direto está a chegar do anel.</string>
+    <string name="l10n_live_screen_reconnect_drops_the_current_link_if_afc27801">Voltar a ligar termina a ligação atual, se existir, e liga-se novamente ao anel. Para emparelhar ou mudar de banda, abra Dispositivos.</string>
 </resources>

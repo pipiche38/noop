@@ -2781,4 +2781,11 @@
     <string name="l10n_app_changelog_a_stress_screen_that_keeps_up_f7ec3f36">Un écran de stress qui suit le rythme, des mesures WHOOP 5 dans les unités que le bracelet envoie, et une bague qui cesse de se répéter</string>
     <string name="l10n_settings_screen_ai_coach_130c3eab">Coach IA</string>
     <string name="l10n_app_changelog_a_gym_log_book_on_your_e0f00272">Un carnet de musculation au poignet, un Coach que vous pouvez désactiver, et un raccourci pour synchroniser</string>
+    <string name="l10n_live_screen_reconnect_ring_3111ab8f">Reconnecter l\'anneau</string>
+    <string name="l10n_live_screen_ring_not_connected_c2418ea8">Anneau non connecté.</string>
+    <string name="l10n_live_screen_connecting_to_the_ring_af2900ea">Connexion à l\'anneau…</string>
+    <string name="l10n_live_screen_connected_authenticating_fa9da040">Connecté, authentification…</string>
+    <string name="l10n_live_screen_connected_waiting_for_live_heart_rate_01d216bb">Connecté, en attente de la fréquence cardiaque en direct.</string>
+    <string name="l10n_live_screen_live_heart_rate_is_flowing_from_f7f6c4fe">La fréquence cardiaque en direct arrive de l\'anneau.</string>
+    <string name="l10n_live_screen_reconnect_drops_the_current_link_if_afc27801">Reconnecter coupe le lien actuel, s\'il existe, et se reconnecte à l\'anneau. Pour associer ou changer de bande, ouvrez Appareils.</string>
 </resources>

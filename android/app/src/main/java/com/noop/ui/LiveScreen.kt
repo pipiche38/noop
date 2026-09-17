@@ -102,6 +102,10 @@ fun LiveScreen(viewModel: AppViewModel, onManageDevices: () -> Unit = {}) {
     // #2075: the console must read out the ACTIVE device, not whichever LiveState field is populated.
     val activeIsWhoop by viewModel.activeIsWhoop.collectAsStateWithLifecycle()
     val ouraBatteryPct by viewModel.ouraBatteryPct.collectAsStateWithLifecycle()
+    // #2305: a ring gets its own status line + reconnect in the slots the WHOOP picker / Connect row used
+    // to fill regardless of the active device.
+    val activeIsOura by viewModel.activeIsOura.collectAsStateWithLifecycle()
+    val ringPhase by viewModel.ouraLinkPhase.collectAsStateWithLifecycle()
     val bpm by viewModel.bpm.collectAsStateWithLifecycle()
     val selectedModel by viewModel.selectedModel.collectAsStateWithLifecycle()
     // Active band name (MW-6) — names the band whose live data the console shows; falls back to "WHOOP".
@@ -243,12 +247,21 @@ fun LiveScreen(viewModel: AppViewModel, onManageDevices: () -> Unit = {}) {
         // Connect control otherwise lives far below, past the Signal Trust grid, so an offline user
         // saw only inert copy up top. Gated purely on `!live.connected`, so it disappears the instant
         // the radio connects. Mirrors the macOS offlineConnectCallout.
-        if (!live.connected) {
+        // WHOOP only (#2305): under a ring this card named the ring over a button that ran a WHOOP
+        // connect — the #2303 reporter's Re-scan ran a full 5/MG handshake with the ring active.
+        if (activeIsWhoop && !live.connected) {
             item {
             OfflineConnectCallout(
                 scanning = live.scanning,
                 onConnect = { requestConnect() },
             )
+            }
+        }
+        // The ring's own above-the-fold affordance: its link phase and a reconnect, shown until `auth OK`
+        // — the same "no link yet" slot the WHOOP callout fills.
+        if (activeIsOura && ringPhase != com.noop.ble.OuraLiveSource.LinkPhase.AUTHENTICATED) {
+            item {
+            RingConnectCallout(phase = ringPhase, onReconnect = { viewModel.reconnectOuraRing() })
             }
         }
 
@@ -341,7 +354,8 @@ fun LiveScreen(viewModel: AppViewModel, onManageDevices: () -> Unit = {}) {
 
         // Body console — focal live HR VESSEL + live physiology (R-R thread, rolling RMSSD, frame/event).
         item {
-        BodyConsole(live = live, bpm = bpm, activeConnection = activeConnection, zone = liveZone, hrMax = profile.hrMax)
+        BodyConsole(live = live, bpm = bpm, activeConnection = activeConnection, zone = liveZone, hrMax = profile.hrMax,
+            activeIsOura = activeIsOura, ringPhase = ringPhase)
         }
 
         // Signal Trust rail — one tile per signal that has to be current for the console to be trusted.
@@ -527,7 +541,9 @@ fun LiveScreen(viewModel: AppViewModel, onManageDevices: () -> Unit = {}) {
         // Strap picker — choose the model before scanning so we look for exactly one device family.
         // Shown whenever we're not actively streaming, so a user with both a WHOOP 4 and a 5/MG can
         // switch between them (it used to hide once `bonded`, which stuck after the first pairing).
-        if (!(live.connected && live.bonded)) {
+        // WHOOP only (#2305): `connected && bonded` is never true for a ring, so without the brand gate the
+        // WHOOP picker was shown MORE readily under a ring than under a strap.
+        if (activeIsWhoop && !(live.connected && live.bonded)) {
             // Two siblings (picker Row + optional 5/MG guidance) that the eager column spaced by 20dp —
             // an inner `Column(spacedBy(20.dp))` reproduces that gap inside the single lazy item.
             item {
@@ -560,7 +576,10 @@ fun LiveScreen(viewModel: AppViewModel, onManageDevices: () -> Unit = {}) {
             }
         }
 
-        // Controls.
+        // Controls. Connect / Buzz / Disconnect are the WHOOP path (`viewModel.connect()` →
+        // `ble.connect(selectedModel)`), so WHOOP only (#2305); a ring gets its own row; any other brand
+        // keeps the "Manage devices" row alone.
+        if (activeIsWhoop) {
         item {
         Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap), modifier = Modifier.fillMaxWidth()) {
             // Compact, single-line labels: with three weight(1f) buttons in a row, the default
@@ -644,6 +663,12 @@ fun LiveScreen(viewModel: AppViewModel, onManageDevices: () -> Unit = {}) {
                     overflow = TextOverflow.Clip,
                 )
             }
+        }
+        }
+        } else if (activeIsOura) {
+        item {
+        RingControls(phase = ringPhase, streaming = live.connected && live.streamingLiveHR,
+            onReconnect = { viewModel.reconnectOuraRing() })
         }
         }
 
@@ -929,6 +954,92 @@ private fun OfflineConnectCallout(scanning: Boolean, onConnect: () -> Unit) {
     }
 }
 
+// MARK: - Ring controls (#2305)
+
+/**
+ * One line per ring link phase, shared by the console centrepiece caption, the above-the-fold callout and
+ * the controls row so the three never disagree about what the ring is doing. Twin of Swift `LiveRingCopy`.
+ */
+private fun ringStatusCopy(phase: com.noop.ble.OuraLiveSource.LinkPhase, streaming: Boolean): String = when (phase) {
+    com.noop.ble.OuraLiveSource.LinkPhase.DISCONNECTED -> uiString(R.string.l10n_live_screen_ring_not_connected_c2418ea8)
+    com.noop.ble.OuraLiveSource.LinkPhase.CONNECTING -> uiString(R.string.l10n_live_screen_connecting_to_the_ring_af2900ea)
+    com.noop.ble.OuraLiveSource.LinkPhase.AUTHENTICATING -> uiString(R.string.l10n_live_screen_connected_authenticating_fa9da040)
+    com.noop.ble.OuraLiveSource.LinkPhase.AUTHENTICATED ->
+        if (streaming) uiString(R.string.l10n_live_screen_live_heart_rate_is_flowing_from_f7f6c4fe)
+        else uiString(R.string.l10n_live_screen_connected_waiting_for_live_heart_rate_01d216bb)
+}
+
+/** Drops the current ring link, if any, and connects again — `OuraLiveSource.reconnect()` through the
+ *  coordinator, so it can only reach the ring that is the live source. Enabled in every phase: a ring
+ *  parked in AUTHENTICATING (#2303) is exactly the case this exists for. */
+@Composable
+private fun RingReconnectButton(onReconnect: () -> Unit) {
+    Button(
+        onClick = onReconnect,
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Palette.accent,
+            contentColor = Palette.surfaceBase,
+        ),
+    ) {
+        Icon(
+            Icons.Filled.Refresh,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp).padding(end = 4.dp),
+        )
+        Text(
+            uiString(R.string.l10n_live_screen_reconnect_ring_3111ab8f),
+            style = NoopType.captionNumber,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
+        )
+    }
+}
+
+/** The ring's above-the-fold card while it is not yet authenticated: the honest phase line and the only
+ *  ring reconnect in the app. Same slot and shape as [OfflineConnectCallout], which is WHOOP-only. */
+@Composable
+private fun RingConnectCallout(phase: com.noop.ble.OuraLiveSource.LinkPhase, onReconnect: () -> Unit) {
+    NoopCard(tint = Palette.accent) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(
+                    Icons.Filled.Bluetooth,
+                    contentDescription = null,
+                    tint = Palette.accent,
+                    modifier = Modifier.size(20.dp),
+                )
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(ringStatusCopy(phase, streaming = false), style = NoopType.headline, color = Palette.textPrimary)
+                    Text(
+                        uiString(R.string.l10n_live_screen_reconnect_drops_the_current_link_if_afc27801),
+                        style = NoopType.subhead,
+                        color = Palette.textSecondary,
+                    )
+                }
+            }
+            RingReconnectButton(onReconnect)
+        }
+    }
+}
+
+/** The ring's row in the controls slot: one primary action. No Buzz (the ring has no haptic) and no
+ *  Disconnect (a stopped ring source would not reconnect for the night; Devices is where a ring is
+ *  deactivated). */
+@Composable
+private fun RingControls(phase: com.noop.ble.OuraLiveSource.LinkPhase, streaming: Boolean, onReconnect: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap), modifier = Modifier.fillMaxWidth()) {
+        Text(ringStatusCopy(phase, streaming), style = NoopType.footnote, color = Palette.textSecondary)
+        RingReconnectButton(onReconnect)
+    }
+}
+
 /** #56: a non-WHOOP live source (the Oura ring, and on Android any external HR source that drives
  *  [LiveState.streamingLiveHR]) that is connected and actively streaming live HR. It streams without a
  *  WHOOP encrypted bond, so `bonded`/`activeConnection` never trip — which left the console reading
@@ -978,7 +1089,10 @@ private fun lastSyncLabel(live: LiveState): String =
 // MARK: - Body console (focal HR ring + live physiology)
 
 @Composable
-private fun BodyConsole(live: LiveState, bpm: Int?, activeConnection: Boolean, zone: Int, hrMax: Int) {
+private fun BodyConsole(
+    live: LiveState, bpm: Int?, activeConnection: Boolean, zone: Int, hrMax: Int,
+    activeIsOura: Boolean, ringPhase: com.noop.ble.OuraLiveSource.LinkPhase,
+) {
     // The liquid hero CARD: a translucent near-black that floats over the day-of-sky so the HR vessel + the
     // white count-up number stay crisp — the card does the contrast work, not a muted sky. A rounded 26
     // corner + a faint white hairline give it the frosted-glass edge of the liquid Today heroCard
@@ -992,7 +1106,8 @@ private fun BodyConsole(live: LiveState, bpm: Int?, activeConnection: Boolean, z
             .padding(20.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            HeartReadout(live = live, bpm = bpm, activeConnection = activeConnection, zone = zone, hrMax = hrMax)
+            HeartReadout(live = live, bpm = bpm, activeConnection = activeConnection, zone = zone, hrMax = hrMax,
+                activeIsOura = activeIsOura, ringPhase = ringPhase)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1005,7 +1120,10 @@ private fun BodyConsole(live: LiveState, bpm: Int?, activeConnection: Boolean, z
 }
 
 @Composable
-private fun HeartReadout(live: LiveState, bpm: Int?, activeConnection: Boolean, zone: Int, hrMax: Int) {
+private fun HeartReadout(
+    live: LiveState, bpm: Int?, activeConnection: Boolean, zone: Int, hrMax: Int,
+    activeIsOura: Boolean, ringPhase: com.noop.ble.OuraLiveSource.LinkPhase,
+) {
     // Tint by the live HR zone when streaming, the Effort world otherwise — the workouts/live colour world
     // (UNCHANGED from the hand-drawn ring this replaced: same zone→colour math, same value-sampled tint).
     val tint = when {
@@ -1065,7 +1183,11 @@ private fun HeartReadout(live: LiveState, bpm: Int?, activeConnection: Boolean, 
             }
         }
         Text(
-            signalTrustSummary(live, activeConnection),
+            // A ring reads its OWN phase (#2305, #2304): `live.connected` is whichever source last wrote
+            // it, and under a ring parked in the nonce handshake it read "Connected, waiting for a
+            // streaming state" for an hour (#2303).
+            if (activeIsOura) ringStatusCopy(ringPhase, streaming = live.connected && live.streamingLiveHR)
+            else signalTrustSummary(live, activeConnection),
             style = NoopType.footnote,
             color = Palette.textTertiary,
             textAlign = TextAlign.Center,

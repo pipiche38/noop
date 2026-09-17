@@ -2669,4 +2669,11 @@
     <string name="l10n_app_changelog_a_stress_screen_that_keeps_up_f7ec3f36">Экран стресса, который успевает, показания WHOOP 5 в тех единицах, которые шлёт ремешок, и кольцо, которое перестаёт повторяться</string>
     <string name="l10n_settings_screen_ai_coach_130c3eab">ИИ-тренер</string>
     <string name="l10n_app_changelog_a_gym_log_book_on_your_e0f00272">Дневник тренировок на запястье, Coach, который можно выключить, и быстрая команда для синхронизации</string>
+    <string name="l10n_live_screen_reconnect_ring_3111ab8f">Переподключить кольцо</string>
+    <string name="l10n_live_screen_ring_not_connected_c2418ea8">Кольцо не подключено.</string>
+    <string name="l10n_live_screen_connecting_to_the_ring_af2900ea">Подключение к кольцу…</string>
+    <string name="l10n_live_screen_connected_authenticating_fa9da040">Подключено, аутентификация…</string>
+    <string name="l10n_live_screen_connected_waiting_for_live_heart_rate_01d216bb">Подключено, ожидание пульса в реальном времени.</string>
+    <string name="l10n_live_screen_live_heart_rate_is_flowing_from_f7f6c4fe">Пульс в реальном времени поступает с кольца.</string>
+    <string name="l10n_live_screen_reconnect_drops_the_current_link_if_afc27801">«Переподключить» разрывает текущее соединение, если оно есть, и снова подключается к кольцу. Чтобы выполнить сопряжение или сменить браслет, откройте раздел «Устройства».</string>
 </resources>

@@ -119,6 +119,23 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Cleared on `stop()` so a previously-paired ring's readings never bleed into a different one.
     @Published public private(set) var featureStatuses: [Int: OuraFeatureStatus] = [:]
 
+    /// Where the ring's session is, for the Live console (#2305). `LiveState.connected` is one flag every
+    /// live source writes into and, for the ring, is only raised by the first live HR push — so under a
+    /// ring the console could only ever read WHOOP state or nothing, and "connected, authenticating" was
+    /// indistinguishable from "connected and dead" (#2303, #2304). This names the phase the ring is
+    /// actually in. `.authenticated` is `auth OK` reached — the stream itself is `LiveState.streamingLiveHR`.
+    public enum LinkPhase: Equatable, Sendable {
+        case disconnected
+        case connecting
+        case authenticating
+        case authenticated
+    }
+    @Published public private(set) var linkPhase: LinkPhase = .disconnected
+
+    /// Set by `reconnect()` while a CONNECTED link is being cancelled on the user's request, so the
+    /// ensuing `didDisconnectPeripheral` reconnects immediately instead of on the involuntary-drop backoff.
+    private var pendingUserReconnectID: UUID?
+
     // MARK: - BLE UUIDs (from the platform-pure OuraGatt facts)
 
     /// The Oura base service (gen3/4/5). `OuraGatt` keeps the raw strings so the package stays
@@ -573,6 +590,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         standingConnectAt = Date()
         log("Oura: leaving a STANDING connect outstanding for \(id) - CoreBluetooth will reconnect "
             + "whenever the ring is reachable, including while the app is suspended")
+        linkPhase = .connecting
         central.connect(p, options: nil)
     }
 
@@ -1459,6 +1477,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         reconnectID = id
         intentionalDisconnect = false
         standingConnectAt = nil   // an explicit connect supersedes any standing one
+        linkPhase = .connecting   // every branch below is an attempt to reach the ring (scan, defer, connect)
         let p = seenPeripherals[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first
         guard let p else {
             // Never seen by this Mac/iPhone yet -> remember it and scan; didDiscover connects on sight.
@@ -1479,14 +1498,49 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         central.connect(p, options: nil)
     }
 
+    /// The user asked for the ring to be reconnected, from the Live console (#2305). Until now there was
+    /// NO user-facing ring reconnect anywhere: `connect(_:)` is only reached from the coordinator on
+    /// activation, and the only "connect" button a ring user could find on the Live screen was the WHOOP
+    /// scan — which is what the #2303 reporter tapped, and which ran a full 5/MG handshake under an
+    /// active ring. This is the ring's own affordance: drop whatever link exists and connect again,
+    /// through the same `connect(_:)` every activation uses. Nothing new goes to the ring.
+    ///
+    /// A connected link is cancelled and re-connected from `didDisconnectPeripheral` (CoreBluetooth
+    /// serialises the two; issuing the connect before the cancel lands would be racing it); a pending
+    /// connect is simply superseded by a fresh one. Also clears a `needsPairing` latch — a user reconnect
+    /// is the documented way out of that dead end — and never scans past a known ring.
+    public func reconnect() {
+        needsPairing = nil
+        intentionalDisconnect = false
+        failedReconnectAttempts = 0
+        if let p = peripheral, p.state == .connected {
+            log("Oura: reconnect requested - dropping the current link and connecting again")
+            pendingUserReconnectID = reconnectID ?? p.identifier
+            central.cancelPeripheralConnection(p)
+            return
+        }
+        guard let id = reconnectID ?? peripheral?.identifier else {
+            log("Oura: reconnect requested - no known ring, scanning")
+            scan()
+            return
+        }
+        if let p = peripheral, p.state == .connecting {
+            central.cancelPeripheralConnection(p)   // supersede the pending / standing connect
+        }
+        log("Oura: reconnect requested")
+        connect(id)
+    }
+
     /// Tear down: cancel the connection, stop scanning, flush, clear all transient state. Idempotent.
     public func stop() {
         // A deliberate teardown (device switch / removal) must NOT auto-reconnect: mark it intentional and
         // drop the reconnect target so any pending backoff bails and no fresh one is scheduled (#912).
         intentionalDisconnect = true
         reconnectID = nil
+        pendingUserReconnectID = nil
         failedReconnectAttempts = 0
         standingConnectAt = nil   // cancelPeripheralConnection below also cancels any standing connect
+        linkPhase = .disconnected
         stopScan()
         pendingConnectID = nil
         stopReengageTimer()
@@ -1677,6 +1731,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         case .streaming:
             if !reachedStreaming {
                 reachedStreaming = true
+                linkPhase = .authenticated
                 adoptPhase = .streaming   // re-auth after an install (or a normal auth) reached the stream: adoption complete
                 pendingInstallKey = nil   // an OK ack already persisted the key; nothing left in flight
                 // The driver's own auth-success path (OuraDriver.nextStep, .authCompleted(.success)) has no
@@ -2558,6 +2613,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         log("Oura: connected - discovering services")
+        linkPhase = .authenticating   // link up; discovery + the nonce handshake follow
         failedReconnectAttempts = 0   // a real connection clears the reconnect backoff (#912)
         standingConnectAt = nil       // whatever was outstanding has landed
         peripheral.delegate = self
@@ -2627,6 +2683,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
     public func centralManager(_ central: CBCentralManager,
                                didFailToConnect peripheral: CBPeripheral, error: Error?) {
         log("Oura: WARNING failed to connect - \(error?.localizedDescription ?? "unknown error")")
+        linkPhase = .disconnected
         if feedsLive { live.connected = false; live.streamingLiveHR = false }
         // The ring wiped its bond (re-paired in the Oura app, or a firmware reset). CoreBluetooth surfaces
         // this as a stable CBError, and re-issuing connect just loops the same stale-pairing failure and
@@ -2697,6 +2754,13 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         flush()
         if feedsLive { live.connected = false; live.streamingLiveHR = false }
         if self.peripheral?.identifier == peripheral.identifier { self.peripheral = nil }
+        linkPhase = .disconnected
+        // A user reconnect (#2305) cancelled this link on purpose: connect again now, not on the backoff.
+        if let id = pendingUserReconnectID {
+            pendingUserReconnectID = nil
+            connect(id)
+            return
+        }
         // Auto-reconnect on an INVOLUNTARY drop (#912): the paired ring went out of range or the link timed
         // out. Re-issue a connect on the backoff so it comes back on its own, exactly like the WHOOP strap.
         // A deliberate `stop()` set `intentionalDisconnect`/cleared `reconnectID`, so this is a no-op there.

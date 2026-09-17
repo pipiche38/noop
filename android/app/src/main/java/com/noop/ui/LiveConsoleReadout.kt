@@ -1,5 +1,6 @@
 package com.noop.ui
 
+import com.noop.ble.ExperimentalBrand
 import com.noop.ble.SourceIdentity
 import com.noop.data.PairedDeviceRow
 
@@ -35,6 +36,21 @@ object LiveConsoleReadout {
         if (activeId == null) return true
         val active = devices.firstOrNull { it.id == activeId } ?: return true
         return SourceIdentity.isWhoop(active)
+    }
+
+    /**
+     * Whether the ACTIVE registry device is an Oura ring (#2305).
+     *
+     * The OPPOSITE default to [activeIsWhoop]: false when the registry has not opened or the active row is
+     * not resolvable. The ring-only affordances this gates (the ring status line, "Reconnect ring") have no
+     * WHOOP-first tone to keep; showing them for an unknown device would offer a reconnect that reaches
+     * nothing. A device that is neither (Polar, Garmin, …) is neither — it gets the Devices row.
+     * Twin of the Swift `LiveConsoleReadout.activeIsOura`.
+     */
+    fun activeIsOura(devices: List<PairedDeviceRow>, activeId: String?): Boolean {
+        if (activeId == null) return false
+        val active = devices.firstOrNull { it.id == activeId } ?: return false
+        return active.brand.equals(ExperimentalBrand.OURA.displayBrand, ignoreCase = true)
     }
 
     /**

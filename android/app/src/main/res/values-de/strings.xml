@@ -2795,4 +2795,11 @@
     <string name="l10n_app_changelog_a_stress_screen_that_keeps_up_f7ec3f36">Ein Stress-Bildschirm, der mitkommt, WHOOP-5-Werte in den Einheiten, die das Band sendet, und ein Ring, der sich nicht mehr wiederholt</string>
     <string name="l10n_settings_screen_ai_coach_130c3eab">KI-Coach</string>
     <string name="l10n_app_changelog_a_gym_log_book_on_your_e0f00272">Ein Trainingstagebuch am Handgelenk, ein Coach, den du abschalten kannst, und ein Kurzbefehl zum Synchronisieren</string>
+    <string name="l10n_live_screen_reconnect_ring_3111ab8f">Ring neu verbinden</string>
+    <string name="l10n_live_screen_ring_not_connected_c2418ea8">Ring nicht verbunden.</string>
+    <string name="l10n_live_screen_connecting_to_the_ring_af2900ea">Verbindung mit dem Ring wird hergestellt …</string>
+    <string name="l10n_live_screen_connected_authenticating_fa9da040">Verbunden, Authentifizierung läuft …</string>
+    <string name="l10n_live_screen_connected_waiting_for_live_heart_rate_01d216bb">Verbunden, warte auf Live-Herzfrequenz.</string>
+    <string name="l10n_live_screen_live_heart_rate_is_flowing_from_f7f6c4fe">Live-Herzfrequenz kommt vom Ring.</string>
+    <string name="l10n_live_screen_reconnect_drops_the_current_link_if_afc27801">„Neu verbinden“ trennt die aktuelle Verbindung, falls vorhanden, und verbindet den Ring erneut. Zum Koppeln oder Wechseln von Bändern öffne „Geräte“.</string>
 </resources>

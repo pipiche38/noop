@@ -2790,4 +2790,11 @@
     <string name="l10n_app_changelog_a_stress_screen_that_keeps_up_f7ec3f36">Ekran stresu, który nadąża, odczyty WHOOP 5 w jednostkach wysyłanych przez opaskę i pierścień, który przestaje się powtarzać</string>
     <string name="l10n_settings_screen_ai_coach_130c3eab">Trener AI</string>
     <string name="l10n_app_changelog_a_gym_log_book_on_your_e0f00272">Dziennik treningowy na nadgarstku, Coach, którego możesz wyłączyć, i skrót do synchronizacji opaski</string>
+    <string name="l10n_live_screen_reconnect_ring_3111ab8f">Połącz ponownie pierścień</string>
+    <string name="l10n_live_screen_ring_not_connected_c2418ea8">Pierścień niepołączony.</string>
+    <string name="l10n_live_screen_connecting_to_the_ring_af2900ea">Łączenie z pierścieniem…</string>
+    <string name="l10n_live_screen_connected_authenticating_fa9da040">Połączono, uwierzytelnianie…</string>
+    <string name="l10n_live_screen_connected_waiting_for_live_heart_rate_01d216bb">Połączono, czekam na tętno na żywo.</string>
+    <string name="l10n_live_screen_live_heart_rate_is_flowing_from_f7f6c4fe">Tętno na żywo płynie z pierścienia.</string>
+    <string name="l10n_live_screen_reconnect_drops_the_current_link_if_afc27801">Połącz ponownie zrywa bieżące połączenie, jeśli istnieje, i ponownie łączy się z pierścieniem. Aby sparować lub przełączyć pasma, otwórz Urządzenia.</string>
 </resources>

@@ -210,6 +210,19 @@ class OuraLiveSource(
      *  to [AdoptPhase.Idle] on every connect/stop/disconnect so a stale outcome never drives a transition. */
     val adoptPhase: StateFlow<AdoptPhase> = _adoptPhase.asStateFlow()
 
+    /**
+     * Where the ring's session is, for the Live console (#2305). `LiveState.connected` is one flag every
+     * live source writes into and, for the ring, is only raised by the first live HR push — so under a
+     * ring the console could only ever read WHOOP state or nothing, and "connected, authenticating" was
+     * indistinguishable from "connected and dead" (#2303, #2304). This names the phase the ring is actually
+     * in. [LinkPhase.AUTHENTICATED] is `auth OK` reached — the stream itself is `LiveState.streamingLiveHR`.
+     * Swift twin: `OuraLiveSource.LinkPhase` / `linkPhase`.
+     */
+    enum class LinkPhase { DISCONNECTED, CONNECTING, AUTHENTICATING, AUTHENTICATED }
+
+    private val _linkPhase = MutableStateFlow(LinkPhase.DISCONNECTED)
+    val linkPhase: StateFlow<LinkPhase> = _linkPhase.asStateFlow()
+
     // MARK: - Live wear/charge indicator (#628 twin) — On wrist / Off wrist / charging
     //
     // The ring emits no "worn" event, so wear is inferred: a LIVE-HR push (0x2F) means a finger; a silent
@@ -1075,14 +1088,52 @@ class OuraLiveSource(
         // is never the intentional-teardown case, so clear the suppression flag.
         reconnectAddress = address
         intentionalDisconnect = false
+        _linkPhase.value = LinkPhase.CONNECTING   // every branch below is an attempt to reach the ring
         val device = seen[address] ?: runCatching { adapter?.getRemoteDevice(address) }.getOrNull()
         if (device == null) { pendingConnectAddress = address; return }
         connectToDevice(device)
     }
 
+    /**
+     * The user asked for the ring to be reconnected, from the Live console (#2305). Until now there was NO
+     * user-facing ring reconnect anywhere: [connect] is only reached from the coordinator on activation,
+     * and the only "connect" button a ring user could find on the Live screen was the WHOOP one — which is
+     * what the #2303 reporter tapped, and which ran a full 5/MG handshake under an active ring. This is
+     * the ring's own affordance: drop whatever link exists and connect again, through the same
+     * [connectToDevice] every activation uses (it already tears the prior GATT down first, so no second
+     * GATT ever runs). Nothing new goes to the ring. Also clears a needs-pairing latch — a user reconnect
+     * is the documented way out of that dead end — and never scans past a known ring. Kotlin twin of the
+     * Swift `reconnect()`.
+     */
+    fun reconnect() {
+        _needsPairing.value = null
+        intentionalDisconnect = false
+        failedReconnectAttempts = 0
+        handler.removeCallbacks(reconnectRunnable)
+        handler.removeCallbacks(retry133Runnable)
+        val device = lastDevice
+        val address = reconnectAddress
+        when {
+            device != null -> {
+                log("Oura: reconnect requested - dropping the current link, if any, and connecting again")
+                _linkPhase.value = LinkPhase.CONNECTING
+                connectToDevice(device)
+            }
+            address != null -> {
+                log("Oura: reconnect requested")
+                connect(address)
+            }
+            else -> {
+                log("Oura: reconnect requested - no known ring, scanning")
+                scan()
+            }
+        }
+    }
+
     private fun connectToDevice(device: BluetoothDevice) {
         lastDevice = device   // remembered so a status-133 disconnect can auto-retry the same ring
         log("Oura: connecting to ${device.address}")
+        _linkPhase.value = LinkPhase.CONNECTING
         // Tear down any prior link first so we never run two GATTs for this source.
         gatt?.let { runCatching { it.disconnect(); it.close() } }
         // A fresh driver per connection: the app key is session-scoped (the proof handshake re-runs on
@@ -1171,6 +1222,7 @@ class OuraLiveSource(
         handler.removeCallbacks(retry133Runnable)
         stopScan()
         pendingConnectAddress = null
+        _linkPhase.value = LinkPhase.DISCONNECTED
         cancelReengage()
         cancelHistoryFetch()
         handler.removeCallbacks(batchQuietRunnable)
@@ -1329,10 +1381,12 @@ class OuraLiveSource(
                     retried133 = false   // a real connection clears the one-shot 133 retry guard
                     failedReconnectAttempts = 0   // a real connection clears the reconnect backoff (#912)
                     log("Oura: connected (status=$status) - discovering services")
+                    _linkPhase.value = LinkPhase.AUTHENTICATING   // link up; discovery + the nonce handshake follow
                     g.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     log("Oura: disconnected (status=$status)")
+                    _linkPhase.value = LinkPhase.DISCONNECTED
                     loggedFirstHr = false   // a reconnect should log its first sample again
                     _batteryPct.value = null
                     resetWear()             // #628: the wear badge must not survive the link dropping
@@ -1497,6 +1551,7 @@ class OuraLiveSource(
                 // must run exactly once per connection, not on every history summary.
                 if (!reachedStreaming) {
                     reachedStreaming = true
+                    _linkPhase.value = LinkPhase.AUTHENTICATED
                     // Re-auth after an install (or a normal auth) reached the stream: adoption is complete.
                     // The OK ack already persisted the key; nothing is left in flight.
                     _adoptPhase.value = AdoptPhase.Streaming

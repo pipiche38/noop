@@ -53,6 +53,36 @@ class LiveConsoleReadoutTest {
         assertFalse(LiveConsoleReadout.activeIsWhoop(listOf(row("o1", "OURA")), "o1"))
     }
 
+    // MARK: - activeIsOura (#2305)
+
+    @Test
+    fun `an oura active device is a ring`() {
+        val rows = listOf(row("my-whoop", "WHOOP"), row("oura-123", "Oura"))
+        assertTrue(LiveConsoleReadout.activeIsOura(rows, "oura-123"))
+        assertFalse(LiveConsoleReadout.activeIsOura(rows, "my-whoop"))
+    }
+
+    @Test
+    fun `an unresolvable active device is not a ring`() {
+        // The opposite default to activeIsWhoop: a ring-only affordance must not appear for a device the
+        // registry cannot name — there would be nothing for "Reconnect ring" to reach.
+        assertFalse(LiveConsoleReadout.activeIsOura(emptyList(), null))
+        assertFalse(LiveConsoleReadout.activeIsOura(emptyList(), "oura-123"))
+    }
+
+    @Test
+    fun `a third brand is neither whoop nor ring`() {
+        val rows = listOf(row("polar-1", "Polar"))
+        assertFalse(LiveConsoleReadout.activeIsWhoop(rows, "polar-1"))
+        assertFalse(LiveConsoleReadout.activeIsOura(rows, "polar-1"))
+    }
+
+    @Test
+    fun `ring brand matching is case insensitive`() {
+        assertTrue(LiveConsoleReadout.activeIsOura(listOf(row("o1", "OURA")), "o1"))
+        assertTrue(LiveConsoleReadout.activeIsOura(listOf(row("o2", "oura")), "o2"))
+    }
+
     // MARK: - batteryPercent
 
     @Test

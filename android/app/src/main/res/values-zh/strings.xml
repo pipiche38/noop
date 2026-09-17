@@ -2756,4 +2756,11 @@
     </plurals>
     <string name="l10n_settings_screen_ai_coach_130c3eab">AI 教练</string>
     <string name="l10n_app_changelog_a_gym_log_book_on_your_e0f00272">腕上的健身记录本、可以完全关闭的 Coach，以及一个同步手环的快捷指令</string>
+    <string name="l10n_live_screen_reconnect_ring_3111ab8f">重新连接戒指</string>
+    <string name="l10n_live_screen_ring_not_connected_c2418ea8">戒指未连接。</string>
+    <string name="l10n_live_screen_connecting_to_the_ring_af2900ea">正在连接戒指…</string>
+    <string name="l10n_live_screen_connected_authenticating_fa9da040">已连接，正在认证…</string>
+    <string name="l10n_live_screen_connected_waiting_for_live_heart_rate_01d216bb">已连接，等待实时心率。</string>
+    <string name="l10n_live_screen_live_heart_rate_is_flowing_from_f7f6c4fe">实时心率正从戒指传来。</string>
+    <string name="l10n_live_screen_reconnect_drops_the_current_link_if_afc27801">重新连接会断开当前连接（如果有）并再次连接戒指。要配对或切换手环，请打开「设备」。</string>
 </resources>

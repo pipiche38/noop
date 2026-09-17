@@ -196,8 +196,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _activeIsWhoop = MutableStateFlow(true)
     val activeIsWhoop: StateFlow<Boolean> = _activeIsWhoop.asStateFlow()
 
+    /** Whether the ACTIVE registry device is an Oura ring (#2305) — the Live console's ring-only row.
+     *  Same registry read as [activeIsWhoop], so the two verdicts can never disagree; the opposite default
+     *  (false), because a ring affordance for an unresolvable device would reconnect nothing. */
+    private val _activeIsOura = MutableStateFlow(false)
+    val activeIsOura: StateFlow<Boolean> = _activeIsOura.asStateFlow()
+
     /** The active Oura ring's own charge, for the Live Console (#2075). Mirrors [ouraWearState]. */
     val ouraBatteryPct: StateFlow<Int?> get() = noopApp.sourceCoordinator.ouraBatteryPct
+
+    /** The active ring's link phase, for the Live Console's ring status line + reconnect (#2305). */
+    val ouraLinkPhase: StateFlow<com.noop.ble.OuraLiveSource.LinkPhase>
+        get() = noopApp.sourceCoordinator.ouraLinkPhase
+
+    /** Reconnect the active ring on the user's request from the Live console (#2305). Routed through the
+     *  coordinator so it can only ever reach the ring that is the live source. */
+    fun reconnectOuraRing() = noopApp.sourceCoordinator.reconnectActiveRing()
 
     /** WHOOP-style day streak (#569): consecutive local days that carry a Charge score, computed on
      *  device from the merged daily metrics. A day "qualifies" when its [com.noop.data.DailyMetric] has a
@@ -254,6 +268,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _activeDeviceName.value = active?.let { displayName(it) }
             // Same read, same row: the name and the "is it a WHOOP" verdict cannot disagree (#2075).
             _activeIsWhoop.value = LiveConsoleReadout.activeIsWhoop(all, active?.id)
+            _activeIsOura.value = LiveConsoleReadout.activeIsOura(all, active?.id)   // #2305
         }
     }
 

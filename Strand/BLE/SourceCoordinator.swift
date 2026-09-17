@@ -482,6 +482,13 @@ final class SourceCoordinator: ObservableObject {
         pendingAdoptDeviceId = deviceId
     }
 
+    /// The user asked the Live console to reconnect the active ring (#2305). Forwarded to the live Oura
+    /// source's own `reconnect()`; a no-op when no ring is the live source, so the console can only ever
+    /// reconnect the device it is showing — never a WHOOP, never a ring that is not active.
+    func reconnectActiveRing() {
+        ouraSource?.reconnect()
+    }
+
     /// Stop the live non-WHOOP source (standard strap, FTMS machine, Huami device, or Oura ring) and drop
     /// the reference. Idempotent — exactly one source is ever live. Also nils the published `ouraSource`
     /// handle so the adopt mirror resets to `.idle` (when an Oura ring was live it is the same object as
