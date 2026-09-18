@@ -197,6 +197,34 @@ enum RescoreBackgroundScheduler {
         }
     }
 
+    /// How many times the re-score execution assertion has expired in this process. A pass reads it at its
+    /// start and end, so its cost line can say whether it outlived its background grant.
+    private(set) static var assertionExpiries = 0
+
+    /// CPU seconds this process has used, user plus system, across all threads. Process-wide, so it includes
+    /// the BLE and UI work beside a pass; nil if the kernel refuses the read.
+    nonisolated static func processCPUSeconds() -> Double? {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return nil }
+        func seconds(_ t: timeval) -> Double { Double(t.tv_sec) + Double(t.tv_usec) / 1_000_000 }
+        return seconds(usage.ru_utime) + seconds(usage.ru_stime)
+    }
+
+    /// What a completed pass cost, and whether it outlived its background grant.
+    ///
+    /// The `re-score: done` duration is uptime, which keeps running while the process is suspended, so on
+    /// its own it cannot separate a pass that was suspended and resumed across wakes from one that ran on
+    /// past an expired assertion. CPU time beside it can: a pass that spends a small fraction of its elapsed
+    /// time on CPU was mostly suspended, and `expired` says whether the assertion ran out on the way.
+    nonisolated static func passCostLogLine(cpuSeconds: Double?, elapsedSeconds: Double,
+                                            assertionExpiries: Int, backgroundedAtEnd: Bool) -> String {
+        let cpu = cpuSeconds.map { String(format: "%.1fs", max(0, $0)) } ?? "n/a"
+        let share = cpuSeconds.flatMap { elapsedSeconds > 0 ? Int((max(0, $0) / elapsedSeconds * 100).rounded()) : nil }
+        return "re-score: cost cpu=\(cpu) elapsed=\(String(format: "%.1f", elapsedSeconds))s"
+            + " cpuShare=\(share.map { "\($0)%" } ?? "n/a") assertionExpired=\(assertionExpiries)"
+            + " backgrounded=\(backgroundedAtEnd)"
+    }
+
     /// Rest after a unit of re-score work when backgrounded, so the pass stays under iOS's background CPU
     /// limit instead of being killed by it (`RescoreBackgroundPolicy.backgroundRestPerWorkSecond`). `mark` is
     /// the uptime the unit started at, in nanoseconds; it is reset to the end of the rest for the next unit.
@@ -221,6 +249,7 @@ enum RescoreBackgroundScheduler {
             // the owed mark is still set (only a completed pass clears it) and that is what the next
             // decision reads.
             MainActor.assumeIsolated {
+                assertionExpiries += 1
                 log("re-score: background time expired mid-pass — it resumes on the next wake (#1538)")
                 schedule()
                 assertion.end()

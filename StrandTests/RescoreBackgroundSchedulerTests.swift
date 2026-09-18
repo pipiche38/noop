@@ -314,5 +314,22 @@ final class RescoreBackgroundSchedulerTests: XCTestCase {
         let latest = RescoreBackgroundScheduler.markRescoreOwed()
         XCTAssertTrue(RescoreBackgroundScheduler.markRescoreCompleted(seconds: 1, owedToken: latest))
     }
-}
 
+    func testThePassCostLineSeparatesASuspendedPassFromABusyOne() {
+        // The field shape: 2 h 27 min of uptime for a pass that is ~2 min of CPU when run in the foreground.
+        XCTAssertEqual(RescoreBackgroundScheduler.passCostLogLine(cpuSeconds: 150, elapsedSeconds: 8_813.2,
+                                                                  assertionExpiries: 1, backgroundedAtEnd: true),
+                       "re-score: cost cpu=150.0s elapsed=8813.2s cpuShare=2% assertionExpired=1 backgrounded=true")
+        XCTAssertEqual(RescoreBackgroundScheduler.passCostLogLine(cpuSeconds: nil, elapsedSeconds: 3,
+                                                                  assertionExpiries: 0, backgroundedAtEnd: false),
+                       "re-score: cost cpu=n/a elapsed=3.0s cpuShare=n/a assertionExpired=0 backgrounded=false")
+    }
+
+    func testProcessCPUTimeAdvances() {
+        let start = RescoreBackgroundScheduler.processCPUSeconds() ?? 0
+        var x = 0.0
+        for i in 0..<2_000_000 { x += sin(Double(i)) }
+        XCTAssertNotEqual(x, 0)
+        XCTAssertGreaterThan(RescoreBackgroundScheduler.processCPUSeconds() ?? 0, start)
+    }
+}

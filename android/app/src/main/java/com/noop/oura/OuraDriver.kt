@@ -281,6 +281,18 @@ class OuraDriver(
         )
     }
 
+    /**
+     * The `get_nonce` request again, for the auth watchdog (#2304) — and ONLY while the driver is still
+     * waiting for a nonce. Outside Authenticating there is nothing to retry and this returns null, so the
+     * transport can never re-open the handshake on a session that already moved on (streaming, a pairing
+     * dead-end, stopped). Same bytes as the Ready step; the phase is left untouched. Kotlin twin of the
+     * Swift `authNonceRetryCommand`.
+     */
+    fun authNonceRetryCommand(): OuraCommand? {
+        if (phase != OuraDriverPhase.Authenticating) return null
+        return OuraCommand("get_nonce", OuraAuth.getAuthNonceCommand())
+    }
+
     /** Stop: reset the flow so a fresh session re-runs auth (the app key is session-scoped, s3.1). */
     fun stop() {
         phase = OuraDriverPhase.Stopped

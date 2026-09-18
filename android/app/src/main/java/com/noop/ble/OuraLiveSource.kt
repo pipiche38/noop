@@ -24,6 +24,7 @@ import com.noop.data.OuraStreamMapping
 import com.noop.data.StreamBatch
 import com.noop.data.StreamPersistence
 import com.noop.oura.OuraAuth
+import com.noop.oura.OuraAuthWatchdog
 import com.noop.oura.OuraCommand
 import com.noop.oura.OuraDriver
 import com.noop.oura.OuraDriverPhase
@@ -440,6 +441,33 @@ class OuraLiveSource(
     /** Cached characteristics, resolved in onServicesDiscovered. */
     private var writeChar: BluetoothGattCharacteristic? = null
     private var notifyChar: BluetoothGattCharacteristic? = null
+
+    // MARK: - Auth watchdog (#2304)
+
+    /** When the most recent `get_nonce` of this session went out; null once the nonce arrived. */
+    private var authNonceRequestedAt: Long? = null
+    /** Escalations already taken this session (0 → resend → toggle → drop). Reset per connection. */
+    private var authEscalations = 0
+    /**
+     * CCCD callbacks still expected from the watchdog's off/on toggle: 2 while the disable is in flight,
+     * 1 while the re-enable is, 0 outside a toggle. [onDescriptorWrite] counts them down so the
+     * re-enable re-sends `get_nonce` instead of replaying [OuraTransition.Ready]. Swift twin:
+     * `authToggleInFlight` (Swift reads `isNotifying` on the callback; Android's descriptor callback
+     * carries no reliable value, hence the count).
+     */
+    private var authToggleCccdPending = 0
+    /** Consecutive sessions the watchdog dropped for silence, printed on the drop line. Reset by any nonce. */
+    private var silentSessionsInARow = 0
+    /**
+     * Whether the Bluetooth stack accepted the most recent write (`writeCharacteristic` returned
+     * `BluetoothStatusCodes.SUCCESS` on API 33+, `true` below). Printed raw on the watchdog's evidence
+     * line — every Oura write is WRITE_TYPE_NO_RESPONSE and nothing else records the return, so "the ring
+     * ignored `get_nonce`" and "the stack never sent it" otherwise produce the identical `→ get_nonce`.
+     * Swift twin: `canSendWriteWithoutResponse`.
+     */
+    private var lastWriteAccepted: Boolean? = null
+    /** The nonce timer. One-shot; re-posted by [authWatchdogRunnable] after an escalation. */
+    private val authWatchdogRunnable = Runnable { authWatchdogFired() }
 
     /** Periodic live-HR re-engage: daytime HR auto-reverts after ~20 s, so while streaming we re-send the
      *  enable+subscribe every ~15 s (OURA_PROTOCOL.md s5.7). The token lets stop() cancel it. */
@@ -1153,6 +1181,9 @@ class OuraLiveSource(
         resetWear()   // #628: fresh session — clear any stale worn/charging badge
         // A fresh session: reset the one-shot streaming/anchor state, and never replay a stale-anchor guess.
         reachedStreaming = false
+        clearAuthWatchdog()   // a fresh session starts with a clean escalation count
+        authEscalations = 0
+        authToggleCccdPending = 0
         loggedFirstTemp = false
         loggedFirstSpo2 = false
         loggedAnchor = false
@@ -1263,6 +1294,8 @@ class OuraLiveSource(
         loggedFeatureStatuses.clear()
         loggedProductInfo.clear()
         reachedStreaming = false
+        clearAuthWatchdog()
+        authToggleCccdPending = 0
         // A stop MID-install is an honest failure (no ack will come); a stop after streaming leaves the
         // completed Streaming outcome intact so the wizard's success transition is not undone.
         if (_adoptPhase.value == AdoptPhase.InstallingKey) _adoptPhase.value = AdoptPhase.Failed
@@ -1391,6 +1424,8 @@ class OuraLiveSource(
                     _batteryPct.value = null
                     resetWear()             // #628: the wear badge must not survive the link dropping
                     cancelReengage()
+                    clearAuthWatchdog()     // a link that drops mid-handshake takes this path, never the escalation
+                    authToggleCccdPending = 0
                     cancelHistoryFetch()
                     handler.removeCallbacks(batchQuietRunnable)
                     handler.removeCallbacks(chainedDrainRunnable)
@@ -1471,6 +1506,27 @@ class OuraLiveSource(
             status: Int,
         ) = guardedCallback("descriptor-write") {
             if (descriptor.uuid != CCCD) return@guardedCallback
+            // The auth watchdog's off/on toggle (#2304) lands here twice — the disable, then the
+            // re-enable — and must NOT replay Ready: the driver is still Authenticating, so the only thing
+            // to do on the re-enable is ask for the nonce again on the freshly re-established
+            // subscription. The Ready replay below is for the first enable of a session only.
+            if (authToggleCccdPending > 0) {
+                authToggleCccdPending -= 1
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    // Attributable only as "the CCCD write did not succeed"; the running nonce clock takes
+                    // the session to the drop step, which is the honest outcome for a toggle that failed.
+                    log("Oura: WARNING auth toggle CCCD write status=$status - leaving the nonce clock to the drop step")
+                    authToggleCccdPending = 0
+                    return@guardedCallback
+                }
+                if (authToggleCccdPending == 1) {
+                    log("Oura: notifications disabled for the auth toggle - re-enabling in ${AUTH_TOGGLE_GAP_MS / 1000.0}s")
+                } else {
+                    log("Oura: notifications re-enabled (CCCD write status=$status) after the auth toggle - re-sending get_nonce")
+                    resendAuthNonce()
+                }
+                return@guardedCallback
+            }
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 log("Oura: notifications enabled (CCCD write status=$status) - beginning auth")
                 // Notifications are live: tell the driver we are Ready. It returns the enable-notify +
@@ -1544,6 +1600,9 @@ class OuraLiveSource(
         val d = driver ?: return@guardedCallback
         val commands = d.nextStep(transition)
         for (cmd in commands) write(cmd)
+        // Ready is the step that writes `get_nonce`; from here the session waits on the ring, and nothing
+        // else is armed until `auth OK`. Start the clock on that wait (#2304).
+        if (transition == OuraTransition.Ready && d.phase == OuraDriverPhase.Authenticating) armAuthWatchdog()
         when (d.phase) {
             OuraDriverPhase.Streaming -> {
                 // The driver returns to Streaming after EACH history-fetch pass completes, so gate all the
@@ -1657,6 +1716,7 @@ class OuraLiveSource(
             // Re-auth with the freshly-installed key. The driver returns enable-notify + get-nonce; the
             // nonce response then flows through the normal routeSecure -> advance path to streaming.
             for (cmd in d.keyInstallAcknowledged()) write(cmd)
+            if (d.phase == OuraDriverPhase.Authenticating) armAuthWatchdog()
         } else {
             log("Oura: the ring did not accept the key (status=${status ?: "none"}) - cannot adopt this ring")
             announceNeedsPairing(KEY_INSTALL_MESSAGE)
@@ -1687,13 +1747,14 @@ class OuraLiveSource(
         val bytes = ByteArray(cmd.bytes.size) { cmd.bytes[it].toByte() }
         log("Oura: → ${cmd.label}")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeCharacteristic(ch, bytes, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
+            val rc = g.writeCharacteristic(ch, bytes, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
+            lastWriteAccepted = rc == android.bluetooth.BluetoothStatusCodes.SUCCESS
         } else {
             @Suppress("DEPRECATION")
             run {
                 ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
                 ch.value = bytes
-                g.writeCharacteristic(ch)
+                lastWriteAccepted = g.writeCharacteristic(ch)
             }
         }
     }
@@ -1810,7 +1871,11 @@ class OuraLiveSource(
     /** Route a 0x2F secure sub-frame to the driver and turn its result into a transition or live events. */
     private fun routeSecure(d: OuraDriver, secure: com.noop.oura.OuraSecureFrame) = guardedCallback("secure-route") {
         when (val routing = d.handleSecureFrame(secure)) {
-            is OuraDriver.SecureRouting.Nonce -> advance(OuraTransition.NonceReceived(routing.nonce))
+            is OuraDriver.SecureRouting.Nonce -> {
+                clearAuthWatchdog()   // the ring answered: the healthy path, and the watchdog's only exit
+                silentSessionsInARow = 0
+                advance(OuraTransition.NonceReceived(routing.nonce))
+            }
             is OuraDriver.SecureRouting.AuthStatus -> {
                 log("Oura: auth status = ${routing.status.name}")
                 advance(OuraTransition.AuthCompleted(routing.status))
@@ -2221,6 +2286,130 @@ class OuraLiveSource(
         handler.removeCallbacks(reengageRunnable)
     }
 
+    // MARK: - Auth watchdog (#2304)
+
+    /**
+     * Start (or restart) the nonce clock: called on every `get_nonce` write of the session — the Ready
+     * step, the post-install re-auth, and the watchdog's own re-sends — so each wait is measured from the
+     * request it belongs to. One-shot; [authWatchdogFired] re-posts it after an escalation. Kotlin twin
+     * of the Swift `armAuthWatchdog`.
+     */
+    private fun armAuthWatchdog() {
+        handler.removeCallbacks(authWatchdogRunnable)
+        authNonceRequestedAt = System.currentTimeMillis()
+        handler.postDelayed(authWatchdogRunnable, OuraAuthWatchdog.NONCE_TIMEOUT_MS)
+    }
+
+    /** The nonce arrived, or the session ended: nothing left to watch. */
+    private fun clearAuthWatchdog() {
+        handler.removeCallbacks(authWatchdogRunnable)
+        authNonceRequestedAt = null
+    }
+
+    /** Ask the driver for the `get_nonce` again (only while it is still Authenticating) and restart the
+     *  clock on it. A driver that has moved on returns null and the watchdog stays cleared. */
+    private fun resendAuthNonce() {
+        val d = driver
+        val cmd = d?.authNonceRetryCommand()
+        if (cmd == null) { clearAuthWatchdog(); return }
+        write(cmd)
+        armAuthWatchdog()
+    }
+
+    /**
+     * The nonce timer expired with no nonce (#2304). Print the one line that says what was not answered
+     * — always-on, because this is exactly the rare-event evidence a report without Test Centre lacks —
+     * then take the next bounded step from [OuraAuthWatchdog]: re-send once, toggle the subscription and
+     * re-send once, then drop the link and let the ordinary reconnect backoff take over. Never
+     * [announceNeedsPairing]: silence is not an auth verdict, and the "re-pair it in the Oura app" dead
+     * end is reserved for an explicit non-success status. Kotlin twin of the Swift `authWatchdogFired`.
+     */
+    private fun authWatchdogFired(): Unit = guardedCallback("auth-watchdog") {
+        val d = driver
+        val requestedAt = authNonceRequestedAt
+        val g = gatt
+        // Only a session still waiting on the nonce has anything to escalate. A driver that moved on (the
+        // nonce landed between the post and this running, a stop, a disconnect) is left alone.
+        if (d == null || d.phase != OuraDriverPhase.Authenticating || requestedAt == null || g == null) {
+            clearAuthWatchdog()
+            return@guardedCallback
+        }
+        val elapsedMs = System.currentTimeMillis() - requestedAt
+        val silent = "Oura: no auth nonce ${elapsedMs / 1000}s after get_nonce - ring silent on the notify channel " +
+            "(last write accepted by the stack=$lastWriteAccepted)"
+        when (OuraAuthWatchdog.step(elapsedMs, authEscalations)) {
+            OuraAuthWatchdog.Step.WAIT -> {
+                // Fired early (clock adjustment / re-arm race): wait out the remainder, no escalation.
+                val remaining = (OuraAuthWatchdog.NONCE_TIMEOUT_MS - elapsedMs).coerceAtLeast(500L)
+                handler.postDelayed(authWatchdogRunnable, remaining)
+            }
+            OuraAuthWatchdog.Step.RESEND_NONCE -> {
+                authEscalations = 1
+                log("$silent - re-sending get_nonce (1/3)")
+                resendAuthNonce()
+            }
+            OuraAuthWatchdog.Step.TOGGLE_NOTIFY -> {
+                authEscalations = 2
+                val notify = notifyChar
+                val cccd = notify?.getDescriptor(CCCD)
+                if (notify == null || cccd == null) {
+                    // No subscription handle to toggle: nothing to re-establish, so go straight to the last
+                    // step rather than pretend a toggle happened.
+                    log("$silent - no notify characteristic to toggle, dropping the link (3/3)")
+                    authEscalations = 3
+                    clearAuthWatchdog()
+                    g.disconnect()
+                    return@guardedCallback
+                }
+                log("$silent - toggling the notify subscription and re-sending get_nonce (2/3)")
+                authToggleCccdPending = 2
+                writeCccd(g, notify, cccd, enabled = false)
+                // The re-enable's callback ([onDescriptorWrite]) re-sends `get_nonce` and re-arms the clock;
+                // until then the clock keeps running from THIS moment so a toggle the ring never acknowledges
+                // still reaches the drop step instead of parking the session again.
+                armAuthWatchdog()
+                handler.postDelayed({
+                    val g2 = gatt ?: return@postDelayed
+                    if (authToggleCccdPending != 1) return@postDelayed   // disconnected, or the disable never acked
+                    writeCccd(g2, notify, cccd, enabled = true)
+                }, AUTH_TOGGLE_GAP_MS)
+            }
+            OuraAuthWatchdog.Step.DROP_LINK -> {
+                authEscalations = 3
+                silentSessionsInARow += 1
+                log("$silent - dropping the link; the ordinary reconnect takes over (3/3, silent session " +
+                    "$silentSessionsInARow in a row)")
+                clearAuthWatchdog()
+                authToggleCccdPending = 0
+                // NOT an intentional teardown: `intentionalDisconnect` stays false and `reconnectAddress`
+                // stays set, so onConnectionStateChange(DISCONNECTED) schedules the normal backoff (#912).
+                g.disconnect()
+            }
+        }
+    }
+
+    /** One CCCD write for the watchdog's toggle — the same enable path [setUpNotifications] takes, plus
+     *  its disable twin, across API levels. */
+    private fun writeCccd(
+        g: BluetoothGatt,
+        notify: BluetoothGattCharacteristic,
+        cccd: BluetoothGattDescriptor,
+        enabled: Boolean,
+    ) = guardedCallback("auth-toggle") {
+        g.setCharacteristicNotification(notify, enabled)
+        val value = if (enabled) BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    else BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeDescriptor(cccd, value)
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                cccd.value = value
+                g.writeDescriptor(cccd)
+            }
+        }
+    }
+
     // MARK: - Honest fallback
 
     /**
@@ -2266,6 +2455,10 @@ class OuraLiveSource(
         val SERVICE_UUID: UUID = UUID.fromString(OuraGatt.serviceUUID)
         val WRITE_UUID: UUID = UUID.fromString(OuraGatt.writeCharacteristicUUID)
         val NOTIFY_UUID: UUID = UUID.fromString(OuraGatt.notifyCharacteristicUUID)
+
+        /** Settle time between disabling and re-enabling the notify subscription on the watchdog's
+         *  TOGGLE_NOTIFY step — open_ring's value for the same CCCD round-trip. Swift: `authToggleGap`. */
+        const val AUTH_TOGGLE_GAP_MS = 2_500L
 
         /** The standard client-characteristic-configuration descriptor (0x2902). */
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
