@@ -815,7 +815,45 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         pendingContinuation = false
         stopBatchQuietTimer()
         log("Oura: fetching history from cursor \(historyCursor) (\(describeCursor(historyCursor))) [cursor-fix]")
+        enterBackfilling()
         advance(.startHistoryFetch(cursor: historyCursor))
+    }
+
+    /// True while THIS source holds `LiveState.backfilling` up. `LiveState` is one object every source
+    /// writes into, so the ring only ever clears a flag it raised itself: a `false` written on a ring
+    /// disconnect must not cancel a strap offload that some other source is publishing.
+    private var publishedBackfilling = false
+
+    /// Publish the drain to `LiveState.backfilling`, the ONE flag every sync indicator reads — the Today
+    /// header capsule/light, the sync chip, the Live and Health "Syncing…" states, the menu-bar row and
+    /// the #1164 "Pending sync" caption on today's Rest. Only `BLEManager` ever raised it, so under a ring
+    /// all of them stayed at rest through every drain: a wearer whose ring was handing over a night saw
+    /// the same header as one whose ring was idle. Mirrors `BLEManager.startBackfilling`, chunk tally
+    /// reset included; the chunk here is one `0x11` batch summary (up to 255 events), counted in
+    /// `handleHistorySummary`. Gated on `feedsLive` like every other `LiveState` write in this type.
+    private func enterBackfilling() {
+        guard feedsLive else { return }
+        publishedBackfilling = true
+        live.backfilling = true
+        live.syncChunksThisSession = 0
+    }
+
+    /// The counterpart, on EVERY path a drain can end by: `finishDrain` (complete, stalled, deadline, or
+    /// no cursor progress) and any link loss while `.fetchingHistory` (`markLinkDown`). A flag left up
+    /// after the link dropped would hold the header in "Syncing" until the next drain cleared it.
+    private func exitBackfilling() {
+        guard publishedBackfilling else { return }
+        publishedBackfilling = false
+        live.backfilling = false
+    }
+
+    /// The link is no longer live: clear the flags a live link publishes. One helper so a drain in flight
+    /// at the moment of loss is closed out on every path, not only the ones someone remembered.
+    private func markLinkDown() {
+        guard feedsLive else { return }
+        exitBackfilling()
+        live.connected = false
+        live.streamingLiveHR = false
     }
 
     private func startHistoryFetchTimer() {
@@ -846,6 +884,8 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         let elapsed = drainStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         let continueDrain = drain.onSummary(bytesLeft: summary.bytesLeft, moreData: summary.moreData,
                                             elapsedSeconds: elapsed)
+        // One GetEvents batch answered = one chunk, the unit the header capsule and VoiceOver count.
+        if publishedBackfilling { live.syncChunksThisSession += 1 }
         if summary.moreData, !continueDrain {
             let reason = elapsed > OuraHistoryDrain.maxDrainSeconds
                 ? "exceeded \(Int(OuraHistoryDrain.maxDrainSeconds))s deadline"
@@ -911,6 +951,10 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         let rebootFullPullPending = commitResumeCursor(drainCompleted: completed)
         logActivityEstimateSummary()
         advance(.historyCursorAdvanced(cursor: historyCursor, moreData: false))
+        // Down BEFORE `noteCompletedOffload` stamps `lastSyncedAt`: the re-score that stamp triggers reads
+        // the flag to decide whether to defer Today's history-wide reads (#755), and must see it at rest.
+        // A chained pass (below) raises it again 5 s later; the indicator handles a restart mid wind-down.
+        exitBackfilling()
         if rebootFullPullPending || resumeBacklog {
             guard chainedDrainPasses < Self.maxChainedDrainPasses else {
                 log("Oura: drain pass cap (\(Self.maxChainedDrainPasses)) reached with work remaining - next periodic fetch / reconnect continues from the banked cursor")
@@ -1927,7 +1971,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         batteryPct = nil
         needsPairing = nil
         flush()                       // persist anything still buffered
-        if feedsLive { live.connected = false; live.streamingLiveHR = false }
+        markLinkDown()
     }
 
     // MARK: - Driver wiring
@@ -3119,7 +3163,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         log("Oura: \(msg)")
         stopReengageTimer()
         stopHistoryFetchTimer()
-        if feedsLive { live.connected = false; live.streamingLiveHR = false }
+        markLinkDown()
     }
 
     // CB delegate callbacks live in the @preconcurrency extensions below. The queue-less central delivers
@@ -3202,7 +3246,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
             }
         default:
             // Radio off / unauthorized / resetting -> the link is not live.
-            if feedsLive { live.connected = false; live.streamingLiveHR = false }
+            markLinkDown()
         }
     }
 
@@ -3333,7 +3377,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
                                didFailToConnect peripheral: CBPeripheral, error: Error?) {
         log("Oura: WARNING failed to connect - \(error?.localizedDescription ?? "unknown error")")
         linkPhase = .disconnected
-        if feedsLive { live.connected = false; live.streamingLiveHR = false }
+        markLinkDown()
         // The ring wiped its bond (re-paired in the Oura app, or a firmware reset). CoreBluetooth surfaces
         // this as a stable CBError, and re-issuing connect just loops the same stale-pairing failure and
         // drains the ring, so DON'T auto-reconnect: route to the honest needs-pairing path instead, exactly
@@ -3408,7 +3452,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         if adoptPhase == .installingKey { adoptPhase = .failed }
         batteryPct = nil
         flush()
-        if feedsLive { live.connected = false; live.streamingLiveHR = false }
+        markLinkDown()
         if self.peripheral?.identifier == peripheral.identifier { self.peripheral = nil }
         // A key trial that just cancelled the link to try the NEXT candidate reconnects immediately (no
         // backoff): the fresh connection rebuilds the driver, which authenticates with the advanced trial
