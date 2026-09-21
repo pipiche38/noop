@@ -96,6 +96,11 @@ class SourceCoordinator(
      *  generic strap / FTMS machine surfaces its charge where the WHOOP strap battery does. Default no-op
      *  keeps existing call sites + JVM tests compiling unchanged. */
     private val batterySink: (Int) -> Unit = {},
+    /** Push a non-WHOOP source's history-offload state into the live state (`ble::publishExternalBackfilling`),
+     *  so a ring drain lights the same sync indicators a WHOOP offload does. `(active, chunks)`: raised with
+     *  0 at drain start, ticked per batch, lowered at drain end. Default no-op keeps existing call sites +
+     *  JVM tests compiling unchanged. */
+    private val syncSink: (Boolean, Int) -> Unit = { _, _ -> },
     /** Push the latest instantaneous speed/cadence/power from a connected standard fitness sensor
      *  (RSC/CSC/CPS), read ADDITIVELY alongside HR by [StandardHrSource], into the live state the in-workout
      *  UI observes (wired at the composition root to `ble::publishExternalSensorMetrics`). PURE ADDITIVE — it
@@ -622,6 +627,7 @@ class SourceCoordinator(
             metCalories = { NoopPrefs.ouraMetCalories(ctx) },  // #2242
             log = straplog,           // Oura connect/auth/stream lifecycle → the SAME exported strap log (#421)
             onBattery = batterySink,  // ring battery → the same live state the WHOOP strap battery uses
+            onBackfilling = syncSink, // ring history drain → the same sync indicators a WHOOP offload lights
             onModel = { model -> scope.launch { runCatching { registry.setModel(id, model) } } },  // #772: correct a name-guessed gen
             onSerial = { serial -> adoptOuraSerial(currentId = id, serial = serial) },  // #771
         )

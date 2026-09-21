@@ -154,6 +154,14 @@ class OuraLiveSource(
     private val log: (String) -> Unit = {},
     /** Fired with the ring's battery percent (0-100) when decoded. */
     private val onBattery: (Int) -> Unit = {},
+    /** Fired as the history drain starts `(true, 0)`, per `0x11` batch summary `(true, n)` and on EVERY path
+     *  the drain can end by `(false, n)` — [finishDrain], [stop] and a link drop mid-drain. Wired to the
+     *  live state's `backfilling` / `syncChunksThisSession`, the one pair every sync indicator reads (the
+     *  Today header capsule and chip, the Sleep and Live "Syncing…" states, the #1164 "Pending sync" Rest
+     *  caption); before this only the WHOOP offload ever raised them, so under a ring all of them stayed at
+     *  rest through every drain. Default no-op keeps the discovery-only scanner + tests inert. Twin of
+     *  Swift's `enterBackfilling` / `exitBackfilling`. */
+    private val onBackfilling: (Boolean, Int) -> Unit = { _, _ -> },
     /** Fired with the ring's TRUE model label ("Oura Ring 3/4/5") once the GetProductInfo hardware id
      *  resolves a generation on connect, so the app can correct a registry row mis-stamped from the
      *  advertised name (#772). Default no-op. Twin of Swift's `onModel`. */
@@ -760,7 +768,28 @@ class OuraLiveSource(
         pendingContinuation = false
         handler.removeCallbacks(batchQuietRunnable)
         log("Oura: fetching history from cursor $historyCursor [cursor-fix]")
+        enterBackfilling()
         advance(OuraTransition.StartHistoryFetch(cursor = historyCursor))
+    }
+
+    /** True while THIS source holds the live `backfilling` flag up, so it only ever lowers a flag it raised:
+     *  a `false` published on a ring disconnect must not cancel an offload some other source is publishing. */
+    private var publishedBackfilling = false
+    /** Batches answered this drain — the chunk tally the header capsule and its VoiceOver label count. */
+    private var drainChunks = 0
+
+    private fun enterBackfilling() {
+        publishedBackfilling = true
+        drainChunks = 0
+        onBackfilling(true, 0)
+    }
+
+    /** The counterpart, on EVERY path a drain can end by; a flag left up after the link dropped would hold
+     *  the header in "Syncing" until the next drain lowered it. */
+    private fun exitBackfilling() {
+        if (!publishedBackfilling) return
+        publishedBackfilling = false
+        onBackfilling(false, drainChunks)
     }
 
     private fun scheduleHistoryFetch() {
@@ -784,6 +813,8 @@ class OuraLiveSource(
     private fun handleHistorySummary(summary: com.noop.oura.GetEventsSummary): Unit = guardedCallback("history-summary") {
         val elapsed = drainStartedAtMs?.let { (System.currentTimeMillis() - it) / 1000.0 } ?: 0.0
         val continueDrain = drain.onSummary(summary.bytesLeft, summary.moreData, elapsed)
+        // One GetEvents batch answered = one chunk, the unit the header capsule and VoiceOver count.
+        if (publishedBackfilling) { drainChunks += 1; onBackfilling(true, drainChunks) }
         if (summary.moreData && !continueDrain) {
             val reason = if (elapsed > OuraHistoryDrain.MAX_DRAIN_SECONDS) {
                 "exceeded ${OuraHistoryDrain.MAX_DRAIN_SECONDS.toInt()}s deadline"
@@ -848,6 +879,9 @@ class OuraLiveSource(
         // two lines after "not a reboot (#2097)" and burn a chained pass that only re-read the kept cursor.
         val rebootFullPullPending = commitResumeCursor(completed)
         advance(OuraTransition.HistoryCursorAdvanced(cursor = historyCursor, moreData = false))
+        // Down here, before the chain / completion branch: a chained pass (below) raises it again 5 s
+        // later, and the Swift twin lowers it before its completed-offload stamp for the same reason.
+        exitBackfilling()
         if (rebootFullPullPending || resumeBacklog) {
             if (chainedDrainPasses >= MAX_CHAINED_DRAIN_PASSES) {
                 log("Oura: drain pass cap ($MAX_CHAINED_DRAIN_PASSES) reached with work remaining - " +
@@ -1413,6 +1447,7 @@ class OuraLiveSource(
         handler.removeCallbacks(chainedDrainRunnable)
         pendingContinuation = false
         chainedDrainPasses = 0
+        exitBackfilling()             // a drain cut by the teardown must not leave the header "Syncing"
         // Drain BEFORE driver.stop() clears its anchor, so a pending event still gets a real anchored time
         // if one exists rather than always falling back to wall-clock at teardown (mirrors Swift's stop()).
         // Same for a hypnogram burst still accumulating (e.g. the session ended mid-drain); one that never
@@ -1588,6 +1623,7 @@ class OuraLiveSource(
                     handler.removeCallbacks(batchQuietRunnable)
                     handler.removeCallbacks(chainedDrainRunnable)
                     pendingContinuation = false
+                    exitBackfilling()   // a drain cut by the drop must not leave the header "Syncing"
                     // Drain BEFORE the driver's anchor is gone (same reasoning as stop()): a pending event
                     // still gets a real anchored time if the current session set one, else an honest
                     // wall-clock fallback rather than being silently dropped. A hypnogram burst still
