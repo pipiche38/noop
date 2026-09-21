@@ -2315,6 +2315,20 @@ class WhoopBleClient(
         if (pct in 0..100) _state.update { it.copy(batteryPct = pct.toDouble()) }
     }
 
+    /**
+     * Surface a non-WHOOP source's history offload in the SAME [backfilling] / [syncChunksThisSession] the
+     * UI reads — the Today header capsule and sync chip, the Sleep and Live "Syncing…" states and the
+     * #1164 "Pending sync" caption on today's Rest. Only the WHOOP offload ever set them, so under a ring
+     * every one of those stayed at rest through every drain. Additive twin of [publishExternalBattery]:
+     * called by [SourceCoordinator] ONLY while WHOOP's own BLE is paused, so it never races
+     * [startBackfilling] / [exitBackfilling]. [chunks] is the source's own tally (one `0x11` batch summary
+     * for the Oura ring); the caller resets it to 0 at drain start, matching the WHOOP path. Mirrors the
+     * Swift OuraLiveSource → LiveState.backfilling wiring.
+     */
+    fun publishExternalBackfilling(active: Boolean, chunks: Int) {
+        _state.update { it.copy(backfilling = active, syncChunksThisSession = chunks) }
+    }
+
     // MARK: Android Bluetooth handles.
     private val bluetoothManager: BluetoothManager? =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
