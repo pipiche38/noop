@@ -357,8 +357,14 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// stop/disconnect. These are last-night values from the history fetch, not live pushes, but we still
     /// only want one log line, not one per sample. Twin of `loggedFirstHR`.
     private var loggedFirstTemp = false
-    /// Logs the FIRST SpO2 sample decoded this session only. Twin of `loggedFirstTemp`.
-    private var loggedFirstSpo2 = false
+    /// Logs the FIRST SpO2 sample decoded this session, PER CHANNEL. Twin of `loggedFirstTemp`, except
+    /// that `.spo2` carries two quantities three orders of magnitude apart (`OuraSpO2Channel`), and one
+    /// latch across both reported whichever the drain served first: the same ring printed `value 93
+    /// (raw)` on one reconnect and `value 101144 (dc_raw)` on the next. A reporter read the second as a
+    /// percentage and filed a defect against SpO2 that was never wrong. One latch per channel, so each
+    /// line names one quantity and a session that only ever saw perfusion says so instead of implying a
+    /// percentage arrived.
+    private var loggedFirstSpo2: Set<OuraSpO2Channel> = []
     /// The 0x13 SyncTime reply parked because nothing yet available could disambiguate its unit (ticks vs
     /// seconds x10): the resume cursor was 0 (fresh pair / post-reboot full pull) or so stale the ring's
     /// clock had run past the window. Retried against the drain's `maxSeenRingTime` as the first batch
@@ -1866,7 +1872,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         loggedFirstHR = false
         droppedFirstLiveHR = false
         loggedFirstTemp = false
-        loggedFirstSpo2 = false
+        loggedFirstSpo2.removeAll()
         loggedAnchor = false
         pendingSyncTime = nil
         loggedTierBKinds.removeAll()
@@ -2393,9 +2399,8 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 }
 
             case .spo2(let s):
-                if !loggedFirstSpo2 {
-                    loggedFirstSpo2 = true
-                    log("Oura: first SpO2 decoded (last night) - value \(s.value) (\(s.unit))")
+                if loggedFirstSpo2.insert(s.channel).inserted {
+                    log("Oura: " + OuraSpO2Channel.firstDecodedLogLine(value: s.value, unit: s.unit))
                 }
                 if let ts = driver.unixSeconds(forRingTimestamp: s.ringTimestamp) {
                     enqueue([e], ts: ts)
@@ -3211,7 +3216,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         loggedFirstHR = false
         droppedFirstLiveHR = false
         loggedFirstTemp = false
-        loggedFirstSpo2 = false
+        loggedFirstSpo2.removeAll()
         loggedAnchor = false
         pendingSyncTime = nil
         loggedTierBKinds.removeAll()
@@ -3308,7 +3313,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         loggedFirstHR = false
         droppedFirstLiveHR = false
         loggedFirstTemp = false
-        loggedFirstSpo2 = false
+        loggedFirstSpo2.removeAll()
         loggedAnchor = false
         pendingSyncTime = nil
         loggedTierBKinds.removeAll()
