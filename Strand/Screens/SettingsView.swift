@@ -56,6 +56,7 @@ struct SettingsView: View {
     /// writes nothing to the strap. See [PuffinExperiment.spo2CandidateDisplayKey].
     @AppStorage(PuffinExperiment.spo2CandidateDisplayKey) private var spo2CandidateDisplayEnabled = false
     @AppStorage(AppModel.ouraMetCaloriesKey) private var ouraMetCaloriesEnabled = false   // #2242
+    @AppStorage(AppModel.ouraAllDayLiveHRKey) private var ouraAllDayLiveHREnabled = false   // item 27
 
     /// #1545 opt-in: score Effort with Banister's exponential TRIMP instead of Edwards' heart-rate zones.
     /// Default OFF — it re-scores the whole window against a different recipe. See
@@ -1855,6 +1856,7 @@ struct SettingsView: View {
         // a second copy; the persisted keys and reversible disable actions remain unchanged there.
         if showFiveMGControls || model.repo.activeDeviceIsOura { spo2CandidateCard }
         if model.repo.activeDeviceIsOura { ouraMetCaloriesCard }   // #2242
+        if model.repo.activeDeviceIsOura { ouraAllDayLiveHRCard }   // item 27
         sleepStagingCard
         rawSensorDiagnosticsCard
     }
@@ -2014,6 +2016,32 @@ struct SettingsView: View {
                     Task { await model.intelligence.analyzeRecent(); await model.repo.refresh() }
                 }
                 Text("Uses Oura's documented method: each minute's intensity above 1.5 MET, at the standard MET rate for your weight, on top of resting energy for the minutes the ring reported. An estimate, not a measurement — on a day without a logged workout it matches the Oura app's own figure (Oura re-scores a logged workout's minutes by activity type, which NOOP does not), and a day the ring covered less than half of shows no number rather than a guess. Turning this on also starts storing the ring's MET samples on this device; it never feeds recovery or illness scoring. Off by default.")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Item 27: keep the Oura ring in daytime-HR mode while the screen is off during the DAY. The ring
+    /// produces daytime heart rate (and the beats behind windowed rMSSD) only while a client holds that
+    /// mode, so the screen-keyed suspend that protects the night suite also empties a pocketed-phone day.
+    /// ON stands the hold down only for the learned night band; OFF is today's behaviour. Oura-only.
+    private var ouraAllDayLiveHRCard: some View {
+        SettingsSection(
+            icon: "waveform.path.ecg",
+            title: "Experimental · All-day heart rate",
+            blurb: "Keeps the ring measuring heart rate through the day, standing it down only for your night."
+        ) {
+            VStack(alignment: .leading, spacing: NoopMetrics.rowSpacing) {
+                Toggle(isOn: $ouraAllDayLiveHREnabled) {
+                    Text("All-day heart rate & HRV")
+                        .font(StrandFont.subhead)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                }
+                .toggleStyle(.switch)
+                .tint(StrandPalette.accent)
+                Text("The ring only measures daytime heart rate while NOOP keeps it in that mode, and NOOP stops asking whenever the screen has been off for five minutes — which protects the ring's own sleep tracking at night, but also leaves a pocketed phone's day blank on the Heart Rate and HRV charts. On, NOOP keeps asking through the day and stops only for your usual night, learned from your sleep history (an hour before your typical bedtime to an hour after your usual wake), so the night is unchanged. Costs ring battery: the ring runs its own optical sensor all day. Until enough nights are learned it behaves as if off. Off by default.")
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
