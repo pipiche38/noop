@@ -1452,7 +1452,7 @@ class WhoopRepository(
      * ([OuraMetSampleEntity.isTwin]: starts within half a period), or of one accepted earlier in the same
      * batch, is dropped; the first copy stays. Rows are assumed to
      * belong to one device (the writer's batch), read back per device. Returns the rows actually
-     * inserted. Swift `insertOuraMetSamples`.
+     * inserted. Swift twin: `WhoopStore.insertOuraMetSamples` (which takes the deviceId separately).
      */
     suspend fun insertOuraMetSamples(rows: List<OuraMetSampleEntity>): Int {
         if (rows.isEmpty()) return 0
@@ -1467,7 +1467,7 @@ class WhoopRepository(
         return inserted
     }
 
-    /** The ring's MET samples in [from, to], ascending (#2242). Swift `ouraMetSamples`. */
+    /** The ring's MET samples in [from, to], ascending (#2242). Swift twin: `WhoopStore.ouraMetSamples`. */
     suspend fun ouraMetSamples(deviceId: String, from: Long, to: Long, limit: Int = DEFAULT_LIMIT):
         List<OuraMetSampleEntity> = dao.ouraMetSamples(deviceId, from, to, limit)
 

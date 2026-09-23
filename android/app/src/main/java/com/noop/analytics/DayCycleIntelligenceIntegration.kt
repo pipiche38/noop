@@ -100,6 +100,7 @@ internal object DayCycleIntelligenceIntegration {
         }
     }
 
+    /** Swift twin: `DayCycleIntelligenceIntegration.compute`. */
     suspend fun compute(
         scoredNights: List<DayResult>,
         editedRows: List<SleepSession>,

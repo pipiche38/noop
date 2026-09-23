@@ -96,7 +96,7 @@ final class OuraMetStoreTests: XCTestCase {
         XCTAssertEqual(again, 0)
         let none = try await store.insertOuraMetSamples([], deviceId: "oura-A")
         XCTAssertEqual(none, 0)
-        let count = try await store.ouraMetSampleCount(deviceId: "oura-A")
+        let count = try await store.ouraMetSamples(deviceId: "oura-A", from: .min, to: .max, limit: .max).count
         XCTAssertEqual(count, 3)
 
         let read = try await store.ouraMetSamples(deviceId: "oura-A", from: 1_755_208_800,
@@ -118,8 +118,8 @@ final class OuraMetStoreTests: XCTestCase {
         _ = try await store.insertOuraMetSamples([OuraMetSample(ts: 1, met: 1.0, state: 0)], deviceId: "oura-A")
         _ = try await store.insertOuraMetSamples([OuraMetSample(ts: 1, met: 1.0, state: 0)], deviceId: "oura-B")
         try await store.deleteAllData(deviceId: "oura-A")
-        let a = try await store.ouraMetSampleCount(deviceId: "oura-A")
-        let b = try await store.ouraMetSampleCount(deviceId: "oura-B")
+        let a = try await store.ouraMetSamples(deviceId: "oura-A", from: .min, to: .max, limit: .max).count
+        let b = try await store.ouraMetSamples(deviceId: "oura-B", from: .min, to: .max, limit: .max).count
         XCTAssertEqual(a, 0)
         XCTAssertEqual(b, 1)
     }

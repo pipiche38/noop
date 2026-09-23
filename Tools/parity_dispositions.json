@@ -88,6 +88,54 @@
       "identity_sha256": "c81cc7100101d3ac1d81e244330c66815450899d6194627ad8f0cbfeb48dee5f",
       "platform": "swift",
       "rationale": "Consumed only by the Apple OuraLiveSource screen-off live-HR suspend (Experimental \"All-day heart rate & HRV\"), to stand the daytime-HR hold down for the learned night instead of for every screen-off. Android's OuraLiveSource.kt has no screen-off suspend (#1546), so there is nothing for a Kotlin twin to gate; per review, Android stays without it until that suspend exists, at which point this becomes a twin."
+    },
+    {
+      "type": "platform_specific",
+      "kind": "add-unpaired-function",
+      "identity": "kotlin\u0000android/app/src/main/java/com/noop/data/WhoopDao.kt::insertOuraMet/1#1",
+      "identity_sha256": "ddec05cb4bf20786165ab44ada3f021da5a83060efc6a2a9a85392ab242d2a42",
+      "platform": "kotlin",
+      "rationale": "Room DAO primitive with no Swift counterpart by construction: on Apple the same SQL runs inside the one WhoopStore (GRDB) function it serves (`WhoopStore.insertOuraMetSamples`, paired with `WhoopRepository.insertOuraMetSamples`); Room needs a separate @Insert for the Repository's twin-dropping insert to call."
+    },
+    {
+      "type": "platform_specific",
+      "kind": "add-unpaired-function",
+      "identity": "kotlin\u0000android/app/src/main/java/com/noop/data/WhoopDao.kt::ouraMetSamples/4#1",
+      "identity_sha256": "a1854344a932d6839a9ba60bfa59229736f06207d41ee9c3a1506b8dea2f776b",
+      "platform": "kotlin",
+      "rationale": "Room DAO primitive with no Swift counterpart by construction: on Apple the same SQL runs inside the one WhoopStore (GRDB) function it serves (`WhoopStore.ouraMetSamples`, paired with the `WhoopRepository.ouraMetSamples` forwarder over this query)."
+    },
+    {
+      "type": "platform_specific",
+      "kind": "add-unpaired-function",
+      "identity": "kotlin\u0000android/app/src/main/java/com/noop/data/DeviceRegistryDao.kt::deleteOuraMetFor/1#1",
+      "identity_sha256": "a0dcb42ed0b5cc1e795f9432f8f647e21af231625d56224d705648c549387f68",
+      "platform": "kotlin",
+      "rationale": "Per-table Room delete used when a device is forgotten. Swift clears the same table through the table-name list in `DeviceRegistryStore` (\"ouraMetSample\"), so there is no per-table function to pair."
+    },
+    {
+      "type": "platform_specific",
+      "kind": "add-unpaired-function",
+      "identity": "kotlin\u0000android/app/src/main/java/com/noop/analytics/IntelligenceEngine.kt::readDaySkinAndWristOff/14#1",
+      "identity_sha256": "75d89046eeeab2049fbd702d33d217cd5591abcf24b8a2bb563cdee9ac9daf3f",
+      "platform": "kotlin",
+      "rationale": "Deliberately one-sided per its own doc: extracted from IntelligenceEngine's scoring method only to keep the JVM method (and its JaCoCo instrumentation) under the 64 KiB bytecode limit; the Swift engine keeps this block inline. The arity changed because the MET toggle is threaded through it (#2242)."
+    },
+    {
+      "type": "platform_specific",
+      "kind": "add-unpaired-function",
+      "identity": "kotlin\u0000android/app/src/main/java/com/noop/analytics/PhysiologicalStepCycleEngine.kt::compute/17#1",
+      "identity_sha256": "26c442cf09505ae210271258c4ca9e2acfc35604de744f9acbd70bdec9f3abaa",
+      "platform": "kotlin",
+      "rationale": "Kotlin-only extraction of the day-cycle fold, kept outside IntelligenceEngine for the JVM 64 KiB method limit (see its header); the Swift logic lives inside `DayCycleIntelligenceIntegration.compute`, which is paired with the Kotlin `DayCycleIntelligenceIntegration.compute`. The arity changed because the MET toggle is threaded through it (#2242)."
+    },
+    {
+      "type": "platform_specific",
+      "kind": "add-unpaired-function",
+      "identity": "kotlin\u0000android/app/src/main/java/com/noop/data/WhoopDatabase.kt::migrate/1#39",
+      "identity_sha256": "81b9152e7189625064e51189ec7be31e1d1f57662438fe54df4c1f779a6bbe48",
+      "platform": "kotlin",
+      "rationale": "Room MIGRATION_40_41's migrate override (ouraMetSample, #2242). The GRDB twin is the registered `v47-oura-met-sample` migration closure, which is not a named function; the two are pinned against each other by the shared schema oracle, not by the ledger."
     }
   ]
 }

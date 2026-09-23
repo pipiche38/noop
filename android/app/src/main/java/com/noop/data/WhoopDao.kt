@@ -731,9 +731,6 @@ interface WhoopDao : DeviceRegistryDao {
     )
     suspend fun ouraMetSamples(deviceId: String, from: Long, to: Long, limit: Int): List<OuraMetSampleEntity>
 
-    @Query("SELECT COUNT(*) FROM ouraMetSample WHERE deviceId = :deviceId")
-    suspend fun countOuraMetFor(deviceId: String): Int
-
     @Query(
         "SELECT * FROM respSample WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +
             "ORDER BY ts ASC LIMIT :limit"

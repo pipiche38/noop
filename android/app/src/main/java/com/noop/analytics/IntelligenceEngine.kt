@@ -405,7 +405,7 @@ object IntelligenceEngine {
      * loop launches from viewModelScope (Dispatchers.Main), so without this hop the whole pass —
      * SleepStager / StrainScorer over up to 21 nights of 1 Hz data , ran on the MAIN THREAD and
      * ANR-killed the app once a few nights had accumulated. Dispatchers.Default is the CPU pool; Room's
-     * suspend DAO calls are main-safe under any dispatcher. (#125)
+     * suspend DAO calls are main-safe under any dispatcher. (#125) Swift twin: `IntelligenceEngine.analyzeRecent`.
      */
     suspend fun analyzeRecent(
         repo: WhoopRepository,

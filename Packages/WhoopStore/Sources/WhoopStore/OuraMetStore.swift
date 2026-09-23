@@ -92,12 +92,4 @@ extension WhoopStore {
                 .map { OuraMetSample(ts: $0["ts"], met: $0["met"], state: $0["state"], epochS: $0["epochS"]) }
         }
     }
-
-    /// Row count for a device (diagnostics / tests).
-    public func ouraMetSampleCount(deviceId: String) async throws -> Int {
-        try syncRead { db in
-            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM ouraMetSample WHERE deviceId = ?",
-                             arguments: [deviceId]) ?? 0
-        }
-    }
 }

@@ -299,6 +299,7 @@ public enum AnalyticsEngine {
     /// and low enough to keep a partially-drained night. Twin of the Kotlin constant.
     public static let vendorRespMinSpanS = 3_600
 
+    /// Score one day. Kotlin twin: `AnalyticsEngine.analyzeDay`.
     public static func analyzeDay(day: String,
                                   // Optional sink for the Effort funnel line. Nil (the default) builds
                                   // nothing at all — see StrainScorer.strain. A parameter rather than a
