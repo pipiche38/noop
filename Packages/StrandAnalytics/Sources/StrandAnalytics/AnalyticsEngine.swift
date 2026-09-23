@@ -1005,6 +1005,8 @@ public enum AnalyticsEngine {
                                                         dayStart: metDayStart, dayEnd: metDayEnd)
             let coveragePct = Int((met.coverageFraction * 100).rounded())
             if met.coverageFraction >= Calories.metMinCoverageFraction {
+                // A TOTAL, not the active share: `activeKcalEst` is a pre-existing misnomer, and the HR
+                // path's `estimateDayCalories` already stores `estimateDayEnergy(...).totalKcal` here.
                 activeKcalEst = met.totalKcal
                 caloriesDiag?("calories \(day): MET path - coverage \(coveragePct)% (\(dayMet.count) samples), active \(Int(met.activeKcal.rounded())) kcal, resting \(Int(met.restingKcal.rounded())) kcal, total \(Int(met.totalKcal.rounded())) kcal")
             } else {

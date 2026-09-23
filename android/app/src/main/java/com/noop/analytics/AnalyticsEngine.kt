@@ -925,6 +925,8 @@ object AnalyticsEngine {
                         "active ${Math.round(met.activeKcal)} kcal, resting ${Math.round(met.restingKcal)} kcal, " +
                         "total ${Math.round(met.totalKcal)} kcal",
                 )
+                // A TOTAL, not the active share: activeKcalEst is a pre-existing misnomer, and the HR
+                // path's estimateDayCalories already stores estimateDayEnergy(...).totalKcal here.
                 met.totalKcal
             } else {
                 caloriesDiag?.invoke(
