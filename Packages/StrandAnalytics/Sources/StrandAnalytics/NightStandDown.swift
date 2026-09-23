@@ -64,8 +64,13 @@ public enum NightStandDown {
 
     /// `HH:MM–HH:MM` for a log line.
     public static func describe(_ band: Band) -> String {
-        func hm(_ s: Int) -> String { String(format: "%02d:%02d", s / 3_600, (s % 3_600) / 60) }
-        return "\(hm(band.startSec))–\(hm(band.endSec))"
+        "\(describeSecOfDay(band.startSec))–\(describeSecOfDay(band.endSec))"
+    }
+
+    /// `HH:MM` for a local second-of-day (wrapped into the day first), for a log line.
+    public static func describeSecOfDay(_ secOfDay: Int) -> String {
+        let s = floorMod(secOfDay, secondsPerDay)
+        return String(format: "%02d:%02d", s / 3_600, (s % 3_600) / 60)
     }
 
     static func floorMod(_ a: Int, _ n: Int) -> Int {

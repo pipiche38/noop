@@ -2901,13 +2901,31 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// so that is where this is checked (the re-engage timer was stopped by the suspend and cannot notice
     /// its own release). Mirrors the screen-on resume minus clearing `screenOffAt`: the screen IS still
     /// off, and the next band entry must find the clock already past the grace.
+    ///
+    /// The line is always-on: this is the one path where a wrong band would hold the ring all night, so
+    /// the log names the band and the local time it fired at (a resume stamped INSIDE its own band is the
+    /// defect, readable without Test Centre), and says whether it re-armed the hold now or left it to the
+    /// next `.streaming` — it does not claim a re-arm it did not make.
     private func resumeAfterStandDownIfReleased() {
         guard loggedLiveHRSuspend, reengageTimer == nil, !liveHRSuspended else { return }
         loggedLiveHRSuspend = false
         loggedUnexpectedLiveHRWhileSuspended = false
-        log("Oura: live-HR re-engage RESUMED - night stand-down ended (all-day HR on), screen still off")
-        guard reachedStreaming, driver != nil else { return }   // a reconnect will arm it at .streaming
-        lastLivePulseAt = Date()   // same watchdog re-stamp as the screen-on resume
+        let now = Date()
+        let at = NightStandDown.describeSecOfDay(Self.localSecOfDay(now))
+        let why: String
+        switch allDayPolicyNow(now) {
+        case .off: why = "all-day HR turned off"
+        case .on(let band, _):
+            why = band.map { "night stand-down \(NightStandDown.describe($0)) ended at \(at) (all-day HR on)" }
+                ?? "no learned sleep schedule at \(at) (all-day HR on)"
+        }
+        guard reachedStreaming, driver != nil else {
+            log("Oura: live-HR re-engage RESUMED - \(why), screen still off; no live link, the next "
+                + "connect arms it")
+            return
+        }
+        log("Oura: live-HR re-engage RESUMED - \(why), screen still off; re-arming the hold now")
+        lastLivePulseAt = now   // same watchdog re-stamp as the screen-on resume
         startReengageTimer()
         reengageLiveHR()
     }
@@ -3716,9 +3734,10 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
                 case .off:
                     break
                 case .on(let band?, let sec):
-                    inBand = ", night stand-down \(NightStandDown.describe(band))"
+                    let span = NightStandDown.describe(band)
+                    inBand = ", night stand-down \(span)"
                     let side = NightStandDown.contains(band, secOfDay: sec) ? "inside" : "outside"
-                    policy = " (all-day HR on, \(side) night stand-down \(NightStandDown.describe(band)))"
+                    policy = " (all-day HR on, \(side) night stand-down \(span))"
                 case .on(nil, _):
                     policy = " (all-day HR on, no learned sleep schedule yet - screen rule applies)"
                 }
