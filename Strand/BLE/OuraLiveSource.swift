@@ -1831,7 +1831,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
             failedReconnectAttempts = 0
             pendingTrialReconnect = false
             if let p = peripheral { central.cancelPeripheralConnection(p) }
-            if feedsLive { live.connected = false; live.streamingLiveHR = false }
+            markLinkDown()   // #2373: close out a drain in flight too
             return
         }
         keyTrialPhase = .trying(attempt: trialIndex + 1, total: trialKeys.count)
