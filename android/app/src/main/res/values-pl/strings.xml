@@ -2849,4 +2849,6 @@
     <string name="fused_record_contribution_in_use">%1$s, %2$s, w użyciu</string>
     <string name="smart_alarm_5mg_armed_experimental">Alarm uzbrojono na opasce eksperymentalnym poleceniem 5/MG. Zgłaszano wybudzanie przez opaski 5.0 i MG, ale nie jest ono gwarantowane. Zachowaj alarm zapasowy na ważne okazje.</string>
     <string name="raw_diag_protocol_probes_detail">Wysyła eksperymentalne zapytania protokołu i włącza alarm opaski 5/MG. Nie jest potrzebne do zwykłej synchronizacji, snu, regeneracji ani kroków.</string>
+    <string name="settings_oura_met_calories_title">Kalorie aktywne ze strumienia MET pierścienia</string>
+    <string name="settings_oura_met_calories_caption">Używa udokumentowanej metody Oura: intensywność każdej minuty powyżej 1,5 MET, według standardowej stawki MET dla Twojej wagi, dodatkowo do energii spoczynkowej za minuty zgłoszone przez pierścień. To szacunek, nie pomiar — w dniu bez zarejestrowanego treningu zgadza się z wartością samej aplikacji Oura (Oura przelicza minuty zarejestrowanego treningu według typu aktywności, czego NOOP nie robi), a dzień, którego pierścień nie pokrył w co najmniej połowie, nie pokazuje żadnej liczby zamiast zgadywania. Włączenie rozpoczyna też zapisywanie próbek MET pierścienia na tym urządzeniu; nigdy nie zasila oceny regeneracji ani choroby. Domyślnie wyłączone.</string>
 </resources>
