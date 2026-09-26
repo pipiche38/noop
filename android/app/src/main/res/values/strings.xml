@@ -2866,4 +2866,6 @@
     <string name="fused_record_contribution_in_use">%1$s, %2$s, in use</string>
     <string name="smart_alarm_5mg_armed_experimental">Armed on the strap with an experimental 5/MG command. Strap-driven wakes have been reported on 5.0 and MG, but are not guaranteed. Keep a backup alarm for anything you cannot miss.</string>
     <string name="raw_diag_protocol_probes_detail">Sends experimental protocol queries and enables the 5/MG strap alarm. Not needed for normal sync, sleep, recovery, or steps.</string>
+    <string name="settings_oura_met_calories_title">Active calories from the ring\'s MET stream</string>
+    <string name="settings_oura_met_calories_caption">Uses Oura\'s documented method: each minute\'s intensity above 1.5 MET, at the standard MET rate for your weight, on top of resting energy for the minutes the ring reported. An estimate, not a measurement — on a day without a logged workout it matches the Oura app\'s own figure (Oura re-scores a logged workout\'s minutes by activity type, which NOOP does not), and a day the ring covered less than half of shows no number rather than a guess. Turning this on also starts storing the ring\'s MET samples on this device; it never feeds recovery or illness scoring. Off by default.</string>
 </resources>
