@@ -1008,8 +1008,46 @@ edit of the ring's tag.
     below, which collapses 0.912 → 0.256 under the same test). Mean 4.75 MET is physiologically correct for
     4.6 km·h⁻¹. The record count **independently re-confirms the 60 s cadence**: 86 MET samples for an
     86-minute walk, exactly 1·min⁻¹. Two caveats kept explicit: MET has a **~1 min recovery lag**, so it
-    smears activity boundaries; and this validates that MET *tracks intensity*, NOT that the absolute MET
-    scale is calibrated against Oura's own numbers — it stays Tier B and unscored.
+    smears activity boundaries; and this walk alone validates that MET *tracks intensity*, NOT that the
+    absolute MET scale is calibrated against Oura's own numbers (later shown at DAY scale by the export
+    validation in the next bullet; per minute only 85 % of values match, and a workout confirmed in the Oura
+    app overrides the wire) — it stays Tier B and unscored.
+  - **✅ `0x50` DAY-SUM VALIDATED against Oura's own MET export, and its record timestamp is the END of the
+    record (NOOP, 2026-09-15/16, Gen 3, 16 days).** The Oura data export's `dailyactivity.csv` carries a
+    per-day 1440 × 60 s `met` series with one-decimal values — the same object the wire encodes. Over 16,839
+    overlapping minutes, Σ_{MET ≥ 1.5}(MET − 1) computed from the NOOP decode reproduces the export's sum on
+    **10/10 clean days within 1–8 %** (the best exactly); the four days off by 15–25 % are the capture's
+    known coverage holes, not decode error (compare over the minutes BOTH sides have, never raw day totals).
+    That lifts the absolute-scale caveat in the bullet above, at day scale: the two-slope byte formula is
+    right. **Timestamp semantics:** aligning the wire minutes to the export's minute series, every record
+    length *n* (2, 3, …, 13 samples) matches best at a shift of exactly **−n minutes**, i.e. the record's
+    timestamp is the END of its LAST sample and sample *i* covers `[ts − (n − i)·60, ts − (n − i − 1)·60)`.
+    Read that way 85 % of minutes match the export's value exactly (r = 0.90); read forward from the
+    timestamp only 23 % do (r = 0.57), and an earlier "best r at −2 min" figure was an artefact of pooling
+    record lengths. The export also carries a `0.1` value (a server-side non-wear marker) the wire never
+    shows. The minutes the ring does not log (~15–20 % of a day) are rest: the ring does not emit `0x50`
+    while still, so they cost nothing in a MET-based day total.
+  - **Derived: Oura's active-calorie rule, recovered exactly (NOOP, 2026-09-16, Gen 3).** On the export's own
+    complete minute series, `active_calories = k × Σ_{MET ≥ 1.5}(MET − 1.5)` with **r = 1.0000** over 75
+    current-era days (r 0.9999 over 396 pre-2025 days), zero intercept, and **k = 0.0175 × the wearer's body
+    mass in kg** (the fitted k and the profile weight agree within 2 %): the textbook MET→kcal conversion
+    (1 MET = 3.5 ml O₂·kg⁻¹·min⁻¹ at ≈ 5 kcal·L⁻¹). That is Oura's support wording, "the portion that exceeds
+    1.5 MET", taken literally; an earlier `(MET − 1) × k` reading (whose k drifted between eras) was the wrong
+    subtraction absorbing an intercept, and there is no hidden per-account constant. The Oura app's
+    `total_calories` does NOT follow a rule this exact (≈ linear in Σ max(MET, 1) plus a constant, r 0.998).
+    Checked against the app's own activity card on two live-captured days: both within 0.4 %.
+    **A workout CONFIRMED in the Oura app floors its minutes at a per-session MET, `max(wire MET, M)`; it does
+    not replace them.** In the export, every one of 9 confirmed sessions has its lowest in-window minute
+    exactly at the session's value, with departures only upward (two of them read 4.2–4.3 where the wire
+    carries the ring's 2.6–2.9). On a live-captured day with one confirmed 279-min session, one parameter,
+    M = 3.8, reproduces both of the app's numbers: the day's active-calorie lift within 0.4 % (a flat
+    replacement would give a third less), and the session card, `N × (M − 1.5) × 0.0175 × weightKg`, within
+    0.2 %. M is chosen per session (3.8, 4.1, 4.2, 4.3, 4.8 and 5.5 seen; two confirmed walks on one day
+    imply 3.8 and 4.1 and lifted that day's figure by 13 %). This matches Oura's support text ("calculated
+    based on average calorie burn rates for that activity type"): a label, not the sensor, so a client
+    computing from the wire alone reads 10–31 % below the app on such a day and agrees with it on every
+    other day. Still an estimate of true expenditure
+    (Kristiansson et al. 2023: lab MET vs calorimetry r 0.93 / MAPE 21 %, free-living AEE MAPE 46–90 %).
   - **Walking-equivalent step estimate, scored against two reference devices (NOOP, 2026-08-02).** For the
     same walk, `activeMinutes × 100` (MET ≥ 3.0 → 82 active min) gives **8,200** against a measured
     **8,834** (Suunto `.fit` `total_cycles × 2`) and **7,868** (WHOOP, same walk): −7 % and +4 %. The
