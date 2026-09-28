@@ -60,6 +60,9 @@ final class SourceCoordinator: ObservableObject {
     /// Item 27: the learned night band an Oura ring's all-day HR hold stands down for (nil = cold start).
     /// Read at each decision by `OuraLiveSource`; the app layer derives it from the sleep learner.
     private let ouraNightBand: () -> NightStandDown.Band?
+    /// Item 27: true until the app's first read of the band's inputs since launch has completed, so the
+    /// ring's launch-time reconnect can tell "not loaded yet" from a real cold start.
+    private let ouraNightBandPending: () -> Bool
 
     // MARK: - State
 
@@ -126,7 +129,8 @@ final class SourceCoordinator: ObservableObject {
          setWhoopActiveDeviceId: @escaping (String) -> Void,
          connectedPeripheralUUID: AnyPublisher<String?, Never>,
          straplog: @escaping (String) -> Void = { _ in },
-         ouraNightBand: @escaping () -> NightStandDown.Band? = { nil }) {
+         ouraNightBand: @escaping () -> NightStandDown.Band? = { nil },
+         ouraNightBandPending: @escaping () -> Bool = { false }) {
         self.registry = registry
         self.live = live
         self.storeHandle = storeHandle
@@ -137,6 +141,7 @@ final class SourceCoordinator: ObservableObject {
         self.connectedPeripheralUUID = connectedPeripheralUUID
         self.straplog = straplog
         self.ouraNightBand = ouraNightBand
+        self.ouraNightBandPending = ouraNightBandPending
     }
 
     // MARK: - Wiring
@@ -490,6 +495,7 @@ final class SourceCoordinator: ObservableObject {
             metCalories: { UserDefaults.standard.bool(forKey: AppModel.ouraMetCaloriesKey) },   // #2242
             allDayLiveHR: { UserDefaults.standard.bool(forKey: AppModel.ouraAllDayLiveHRKey) },   // item 27
             nightBand: ouraNightBand,   // item 27
+            nightBandPending: ouraNightBandPending,
             log: straplog,
             onBattery: { [live] pct in live.setBattery(Double(pct)) },
             onModel: { [registry] model in registry.setModel(id, model: model) },   // #772: correct a name-guessed gen
