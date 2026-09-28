@@ -11,9 +11,9 @@ import Foundation
 /// 123–144/144 to a median of ~16, and windowed rMSSD by day emptied with them (the daytime beats are the
 /// same `0x80` records). This band is what lets the stand-down key on the NIGHT instead of on the screen.
 ///
-/// Bedtime is `habitualMidsleepSec − typicalSleepHours / 2`, wake is `+ typicalSleepHours / 2`, exactly the
-/// derivation `BatteryEstimator.bedtimeAlert` uses, so the two policies can never disagree about when the
-/// user's night is; the band then opens `leadSeconds` before that bedtime (an early night must still stand
+/// Bedtime is `BatteryEstimator.bedtimeSec` and wake is midsleep `+ BatteryEstimator.halfNightSec`: the band
+/// CALLS the arithmetic `BatteryEstimator.bedtimeAlert` calls rather than restating it, so the two policies
+/// can never disagree about when the user's night is; the band then opens `leadSeconds` before that bedtime (an early night must still stand
 /// down) and closes `tailSeconds` after that wake (a lie-in must not re-arm the hold). Cold start — fewer
 /// nights than the learner needs — yields nil, and the caller falls back to the screen rule: inventing a
 /// 23:00 band would hold or release the ring at the wrong hour for exactly the shift/late sleepers the
@@ -45,11 +45,12 @@ public enum NightStandDown {
                             leadSeconds: Int = leadSeconds, tailSeconds: Int = tailSeconds) -> Band? {
         guard let midsleep = habitualMidsleepSec, let hours = typicalSleepHours, hours > 0,
               (0..<secondsPerDay).contains(midsleep) else { return nil }
-        let half = Int((hours * 1_800).rounded())
+        let half = BatteryEstimator.halfNightSec(sleepHours: hours)
         // A schedule whose padded night would cover the whole day has nothing left to call "day"; treat
         // it as unlearned rather than hold the ring never.
         guard 2 * half + leadSeconds + tailSeconds < secondsPerDay else { return nil }
-        return Band(startSec: floorMod(midsleep - half - leadSeconds, secondsPerDay),
+        let bedtime = BatteryEstimator.bedtimeSec(midsleepSec: midsleep, sleepHours: hours)
+        return Band(startSec: floorMod(bedtime - leadSeconds, secondsPerDay),
                     endSec: floorMod(midsleep + half + tailSeconds, secondsPerDay))
     }
 

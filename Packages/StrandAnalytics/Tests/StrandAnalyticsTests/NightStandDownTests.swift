@@ -66,4 +66,24 @@ final class NightStandDownTests: XCTestCase {
         XCTAssertEqual(band.startSec, clock(19, 45))
         XCTAssertEqual(band.endSec, clock(5, 15))
     }
+
+    /// The band's edges are DERIVED from `BatteryEstimator`, not restated beside it: at the band's
+    /// bedtime (its start plus the lead) the battery night guard reads zero hours to bed, and the wake
+    /// edge is midsleep plus the same `halfNightSec`. Change either policy's arithmetic alone and this
+    /// fails, which a literal expectation cannot do.
+    func testBandEdgesAgreeWithTheBatteryNightGuard() {
+        for (midsleep, hours) in [(clock(0, 30), 7.5), (clock(2, 30), 8.0), (clock(23), 6.25), (clock(4, 15), 9.3333),
+                                  (clock(12), 7.0), (1, 1.0 / 3600)] {
+            let band = NightStandDown.band(habitualMidsleepSec: midsleep, typicalSleepHours: hours)!
+            let bedtime = NightStandDown.floorMod(band.startSec + NightStandDown.leadSeconds, 86_400)
+            XCTAssertEqual(bedtime, BatteryEstimator.bedtimeSec(midsleepSec: midsleep, sleepHours: hours))
+            let guardAtBedtime = BatteryEstimator.bedtimeAlert(nowSecOfDay: bedtime, habitualMidsleepSec: midsleep,
+                                                               typicalSleepHours: hours, usableRemainingHours: 100,
+                                                               charging: false, alerted: false)
+            XCTAssertEqual(try XCTUnwrap(guardAtBedtime.runway).hoursUntilBedtime, 0, "\(midsleep) \(hours)")
+            let wake = NightStandDown.floorMod(band.endSec - NightStandDown.tailSeconds, 86_400)
+            XCTAssertEqual(wake, NightStandDown.floorMod(
+                midsleep + BatteryEstimator.halfNightSec(sleepHours: hours), 86_400))
+        }
+    }
 }
