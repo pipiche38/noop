@@ -269,6 +269,11 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// cold start (the screen rule then applies as before). Supplied by the app layer from the same sleep
     /// learner the battery night-guard reads.
     private let nightBand: () -> NightStandDown.Band?
+    /// Item 27: true until the app has finished its first read of the inputs `nightBand` derives from since
+    /// launch. The Oura restore reconnect lands about a second after launch, before that async read, so
+    /// without this a nil band at launch reads as a cold start it is not (09-28 log: every launch's first
+    /// auth said "no learned sleep schedule yet" on a phone that stood down all night on its learned band).
+    private let nightBandPending: () -> Bool
     private let log: (String) -> Void
     private let onBattery: (Int) -> Void
     /// Fired with the ring's TRUE model label ("Oura Ring 3/4/5") once the GetProductInfo hardware id resolves
@@ -1321,6 +1326,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Item 27: what the all-day toggle contributes to the stand-down decision, sampled now.
     private func allDayPolicyNow(_ now: Date = Date()) -> AllDayLiveHR {
         guard allDayLiveHR() else { return .off }
+        if nightBandPending() { return .loading }
         return .on(band: nightBand(), nowSecOfDay: Self.localSecOfDay(now))
     }
 
@@ -1348,6 +1354,10 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         /// Toggle on. `band` nil = no learned sleep schedule yet (cold start): the screen rule applies
         /// rather than a made-up clock, and the suspend line says so.
         case on(band: NightStandDown.Band?, nowSecOfDay: Int)
+        /// Toggle on, but the learned schedule has not been read yet since launch. Decides exactly like cold
+        /// start (the screen rule) and is only ever momentary, but it is NOT a cold start, so every line
+        /// that names the policy says "not loaded yet" instead.
+        case loading
     }
 
     /// Pure policy so it is testable without a `CBCentralManager` (this class owns one and cannot be built
@@ -1366,6 +1376,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         case .on(let band, let secOfDay):
             guard let band else { return true }   // cold start: no learned night, keep the screen rule
             return NightStandDown.contains(band, secOfDay: secOfDay)
+        case .loading: return true               // schedule not read yet: the same screen rule
         }
     }
 
@@ -1398,6 +1409,12 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// The strap log is generation-clipped (a 14 h night once clipped to 21 min), so an all-night periodic
     /// line would evict the very evidence this change exists to capture.
     private var loggedLiveHRSuspend = false
+    /// Set with `loggedLiveHRSuspend` when the suspend was decided WITHOUT a band (all-day HR on, but cold
+    /// start or schedule still loading), so the band-release resume that follows says the schedule became
+    /// available rather than that a night ended. Otherwise a screen-off relaunch in the morning would print
+    /// "night stand-down … ended at 08:25", the exact line the band-end check is scored on, for a release
+    /// caused by nothing but the launch read completing.
+    private var liveHRSuspendedWithoutBand = false
 
     /// Logged-once latch (per suspend episode) for a live-HR push arriving AFTER we believe the ring is
     /// suspended — the direct falsification signal for `disableLiveHR`. 08-17/18 found the
@@ -1435,6 +1452,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 persistSleepSession: @escaping (CachedSleepSession) -> Void = { _ in },
                 allDayLiveHR: @escaping () -> Bool = { false },
                 nightBand: @escaping () -> NightStandDown.Band? = { nil },
+                nightBandPending: @escaping () -> Bool = { false },
                 log: @escaping (String) -> Void = { _ in },
                 onBattery: @escaping (Int) -> Void = { _ in },
                 onModel: @escaping (String) -> Void = { _ in },
@@ -1451,6 +1469,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         self.persistSleepSession = persistSleepSession
         self.allDayLiveHR = allDayLiveHR
         self.nightBand = nightBand
+        self.nightBandPending = nightBandPending
         self.log = log
         self.onBattery = onBattery
         self.onModel = onModel
@@ -1580,6 +1599,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         let wasSuspended = loggedLiveHRSuspend
         screenOffAt = nil
         loggedLiveHRSuspend = false
+        liveHRSuspendedWithoutBand = false
         loggedUnexpectedLiveHRWhileSuspended = false
         guard wasSuspended else { return }
         log("Oura: live-HR re-engage RESUMED - screen on")
@@ -2672,8 +2692,12 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         switch allDayPolicyNow() {
         case .off: why = ""
         case .on(let band, _):
+            liveHRSuspendedWithoutBand = band == nil
             why = band.map { " inside the night stand-down \(NightStandDown.describe($0)) (all-day HR on)" }
                 ?? " (all-day HR on, but no learned sleep schedule yet - screen rule applies)"
+        case .loading:
+            liveHRSuspendedWithoutBand = true
+            why = " (all-day HR on, but the sleep schedule is not loaded yet - screen rule applies)"
         }
         log("Oura: live-HR re-engage SUSPENDED - screen off \(Int(liveHRSuspendDelay / 60)) min\(why), leaving the "
             + "ring free to run its own night suite (history fetch continues every \(Int(historyFetchInterval))s)")
@@ -2691,18 +2715,20 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// defect, readable without Test Centre), and says whether it re-armed the hold now or left it to the
     /// next `.streaming` — it does not claim a re-arm it did not make.
     private func resumeAfterStandDownIfReleased() {
+        // A suspend decided without a band that a band now covers is band-held from here on: when it
+        // releases, a night HAS ended (a night-time relaunch suspends while loading, then loads inside
+        // the band, and its 08:1x release is the band-end resume proper).
+        if liveHRSuspendedWithoutBand, liveHRSuspended, case .on(_?, _) = allDayPolicyNow() {
+            liveHRSuspendedWithoutBand = false
+        }
         guard loggedLiveHRSuspend, reengageTimer == nil, !liveHRSuspended else { return }
+        let suspendedWithoutBand = liveHRSuspendedWithoutBand
         loggedLiveHRSuspend = false
+        liveHRSuspendedWithoutBand = false
         loggedUnexpectedLiveHRWhileSuspended = false
         let now = Date()
-        let at = NightStandDown.describeSecOfDay(Self.localSecOfDay(now))
-        let why: String
-        switch allDayPolicyNow(now) {
-        case .off: why = "all-day HR turned off"
-        case .on(let band, _):
-            why = band.map { "night stand-down \(NightStandDown.describe($0)) ended at \(at) (all-day HR on)" }
-                ?? "no learned sleep schedule at \(at) (all-day HR on)"
-        }
+        let why = Self.standDownResumeReason(allDayPolicyNow(now), suspendedWithoutBand: suspendedWithoutBand,
+                                             at: NightStandDown.describeSecOfDay(Self.localSecOfDay(now)))
         guard reachedStreaming, driver != nil else {
             log("Oura: live-HR re-engage RESUMED - \(why), screen still off; no live link, the next "
                 + "connect arms it")
@@ -2712,6 +2738,27 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         lastLivePulseAt = now   // same watchdog re-stamp as the screen-on resume
         startReengageTimer()
         reengageLiveHR()
+    }
+
+    /// Why a screen-dark stand-down released, as the RESUMED line states it. Pure, so the one attribution
+    /// the band-end check is scored on ("night stand-down … ended at …") is pinned by a test: it is only
+    /// claimed for a suspend a band actually held. A suspend decided without a band (cold start, or the
+    /// schedule still loading at launch) that a band now excludes was released by the schedule arriving.
+    nonisolated static func standDownResumeReason(_ policy: AllDayLiveHR, suspendedWithoutBand: Bool,
+                                                  at: String) -> String {
+        switch policy {
+        case .off: return "all-day HR turned off"
+        case .on(let band?, _) where suspendedWithoutBand:
+            return "sleep schedule available at \(at), outside the night stand-down "
+                + "\(NightStandDown.describe(band)) (all-day HR on)"
+        case .on(let band?, _):
+            return "night stand-down \(NightStandDown.describe(band)) ended at \(at) (all-day HR on)"
+        case .on(nil, _):
+            return "no learned sleep schedule at \(at) (all-day HR on)"
+        case .loading:
+            // Unreachable while `.loading` keeps the screen rule, but named honestly should that change.
+            return "sleep schedule not loaded yet at \(at) (all-day HR on)"
+        }
     }
 
     /// Actively turn daytime-HR mode off rather than merely declining to re-arm it. `reengageLiveHR`'s own
@@ -3428,6 +3475,8 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
                     policy = " (all-day HR on, \(side) night stand-down \(span))"
                 case .on(nil, _):
                     policy = " (all-day HR on, no learned sleep schedule yet - screen rule applies)"
+                case .loading:
+                    policy = " (all-day HR on, sleep schedule not loaded yet - screen rule applies)"
                 }
                 log(wanted ? "Oura: auth OK - enabling live HR\(policy)"
                            : "Oura: auth OK - live HR suspended (screen off\(inBand)), daytime HR left untouched")

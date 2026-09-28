@@ -647,7 +647,8 @@ final class AppModel: ObservableObject {
             straplog: { [weak self] line in
                 self?.live.append(log: "[\(AppModel.logTimeFormatter.string(from: Date()))] \(line)")
             },
-            ouraNightBand: { [weak self] in self?.ouraNightBand() })   // item 27
+            ouraNightBand: { [weak self] in self?.ouraNightBand() },   // item 27
+            ouraNightBandPending: { [weak self] in self?.ouraNightBandPending ?? false })
         coordinator.start()
         self.deviceRegistry = registry
         // #1303: adoption re-points the strap onto its stable `whoop-<serial>` id inside BLEManager (which
@@ -1918,6 +1919,9 @@ final class AppModel: ObservableObject {
     /// (< `SleepStageTotals.habitualMinDays` nights) → `BatteryEstimator.bedtimeAlert` stays silent.
     private var habitualMidsleepCache: Int? = nil
     private var habitualMidsleepCachedAt: Date? = nil
+    /// Set once the FIRST midsleep read since launch has completed, whatever it returned. Until then a nil
+    /// cache means "not read yet", not "cold start".
+    private var habitualMidsleepReadOnce = false
 
     /// Refresh the cached habitual midsleep, at most hourly. The learner reads the full sleep history
     /// and the value moves on a timescale of WEEKS, so recomputing it on every `repo.$days` republish
@@ -1928,6 +1932,7 @@ final class AppModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             self.habitualMidsleepCache = await self.repo.habitualMidsleepSec()
+            self.habitualMidsleepReadOnce = true
         }
     }
 
@@ -2183,6 +2188,12 @@ final class AppModel: ObservableObject {
             typicalSleepHours: BatteryEstimator.typicalSleepHours(
                 nightlyHours: repo.days.compactMap { $0.totalSleepMin.map { $0 / 60.0 } }))
     }
+
+    /// Item 27: true until BOTH of `ouraNightBand`'s inputs have been read once since launch — `repo.days`
+    /// (`repo.loaded`) and the first async midsleep read (`refreshHabitualMidsleep`). The ring's restore
+    /// reconnect lands about a second after launch, ahead of both, and a nil band then is "not loaded yet",
+    /// not a cold start.
+    var ouraNightBandPending: Bool { !(repo.loaded && habitualMidsleepReadOnce) }
 
     /// Recompute the v5 skin-temp suite snapshots (cycle phase + body clock) from the current history.
     /// Called from the analytics pass and when the cycle opt-in flips. Honest-nil throughout: cycle is
