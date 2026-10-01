@@ -647,7 +647,8 @@ final class AppModel: ObservableObject {
             straplog: { [weak self] line in
                 self?.live.append(log: "[\(AppModel.logTimeFormatter.string(from: Date()))] \(line)")
             },
-            ouraNightBand: { [weak self] in self?.ouraNightBand() })   // item 27
+            ouraNightBand: { [weak self] in self?.ouraNightBand() },   // item 27
+            ouraNightBandPending: { [weak self] in self?.ouraNightBandPending ?? false })
         coordinator.start()
         self.deviceRegistry = registry
         // #1303: adoption re-points the strap onto its stable `whoop-<serial>` id inside BLEManager (which
@@ -1311,6 +1312,11 @@ final class AppModel: ObservableObject {
     /// The active Oura ring's honest needs-pairing message (mirrored off the live source), surfaced verbatim
     /// on the wizard's Failed step. nil when the ring is fine or no Oura source is live.
     @Published private(set) var ouraNeedsPairing: String?
+    /// The live outcome of an Advanced "I already have my ring's key(s)" verification, mirrored off the
+    /// coordinator's live `OuraLiveSource` so the wizard can drive its "Verifying your key" step to a winning
+    /// key (close) or an honest exhausted dead-end WITHOUT reaching into the BLE layer. nil when no trial is
+    /// in flight. See `OuraLiveSource.KeyTrialPhase`.
+    @Published private(set) var ouraKeyTrialPhase: OuraLiveSource.KeyTrialPhase?
     /// Combine subscriptions mirroring the live Oura source's `adoptPhase` / `needsPairing` into the two
     /// published properties above. Re-bound whenever the active Oura source changes.
     private var ouraAdoptCancellables = Set<AnyCancellable>()
@@ -1363,9 +1369,26 @@ final class AppModel: ObservableObject {
     /// commit. Never prompts to make-active (the takeover IS the user's new active source).
     func adoptOuraRing(_ device: PairedDevice) {
         sourceCoordinator?.requestOuraAdopt(deviceId: device.id)
-        // Reset the mirror so a previous attempt's outcome never leaks into this one.
+        // Reset the mirrors so a previous attempt's outcome (adopt or key-trial) never leaks into this one.
         ouraAdoptPhase = .idle
         ouraNeedsPairing = nil
+        ouraKeyTrialPhase = nil
+        registerDevice(device, makeActive: true)
+        bindOuraAdoptMirror()
+    }
+
+    /// Verify one or more candidate keys against an Oura ring the user already owns the key(s) for (the
+    /// Advanced "I already have my ring's key" path): arm a key trial for THIS ring so its next live session
+    /// tries each candidate in turn and keeps the first that authenticates, then register it active (which
+    /// starts that session) and begin mirroring the trial outcome for the wizard. This is NON-destructive —
+    /// no adopt consent is granted, so the ring is never reset and no key is installed; a wrong candidate
+    /// simply fails auth and the next is tried. Nothing is saved until a candidate authenticates.
+    func verifyOuraKeys(_ device: PairedDevice, keys: [Data]) {
+        sourceCoordinator?.requestOuraKeyTrial(deviceId: device.id, keys: keys)
+        // Reset the mirrors so a previous attempt's outcome never leaks into this one.
+        ouraAdoptPhase = .idle
+        ouraNeedsPairing = nil
+        ouraKeyTrialPhase = keys.isEmpty ? nil : .trying(attempt: 1, total: keys.count)
         registerDevice(device, makeActive: true)
         bindOuraAdoptMirror()
     }
@@ -1391,6 +1414,14 @@ final class AppModel: ObservableObject {
             }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.ouraNeedsPairing = $0 }
+            .store(in: &ouraAdoptCancellables)
+        coordinator.$ouraSource
+            .flatMap { source -> AnyPublisher<OuraLiveSource.KeyTrialPhase?, Never> in
+                source?.$keyTrialPhase.eraseToAnyPublisher()
+                    ?? Just(nil).eraseToAnyPublisher()
+            }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.ouraKeyTrialPhase = $0 }
             .store(in: &ouraAdoptCancellables)
     }
 
@@ -1919,6 +1950,9 @@ final class AppModel: ObservableObject {
     /// (< `SleepStageTotals.habitualMinDays` nights) → `BatteryEstimator.bedtimeAlert` stays silent.
     private var habitualMidsleepCache: Int? = nil
     private var habitualMidsleepCachedAt: Date? = nil
+    /// Set once the FIRST midsleep read since launch has completed, whatever it returned. Until then a nil
+    /// cache means "not read yet", not "cold start".
+    private var habitualMidsleepReadOnce = false
 
     /// Refresh the cached habitual midsleep, at most hourly. The learner reads the full sleep history
     /// and the value moves on a timescale of WEEKS, so recomputing it on every `repo.$days` republish
@@ -1929,6 +1963,7 @@ final class AppModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             self.habitualMidsleepCache = await self.repo.habitualMidsleepSec()
+            self.habitualMidsleepReadOnce = true
         }
     }
 
@@ -2183,6 +2218,23 @@ final class AppModel: ObservableObject {
             habitualMidsleepSec: habitualMidsleepCache,
             typicalSleepHours: BatteryEstimator.typicalSleepHours(
                 nightlyHours: repo.days.compactMap { $0.totalSleepMin.map { $0 / 60.0 } }))
+    }
+
+    /// Item 27: true until BOTH of `ouraNightBand`'s inputs have been read once since launch — `repo.days`
+    /// (`repo.loaded`) and the first async midsleep read (`refreshHabitualMidsleep`). The ring's restore
+    /// reconnect lands about a second after launch, ahead of both, and a nil band then is "not loaded yet",
+    /// not a cold start.
+    var ouraNightBandPending: Bool { !(repo.loaded && habitualMidsleepReadOnce) }
+
+    /// #2242 (EXPERIMENTAL, default OFF): estimate active calories from the Oura ring's OWN per-minute MET
+    /// stream (0x50) with Oura's documented method — minutes above 1.5 MET × RMR — instead of the HR-only
+    /// Keytel path over the ring's sparse banked HR. Gates BOTH the writer (the ring's MET records are only
+    /// persisted to `ouraMetSample` while this is on, so an OFF install's DB is byte-identical to today's)
+    /// and the analyzeDay read. An estimate, not a measurement. No effect without an Oura ring.
+    static let ouraMetCaloriesKey = "noopOuraMetCalories"
+    var ouraMetCalories: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.ouraMetCaloriesKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.ouraMetCaloriesKey) }
     }
 
     /// Recompute the v5 skin-temp suite snapshots (cycle phase + body clock) from the current history.

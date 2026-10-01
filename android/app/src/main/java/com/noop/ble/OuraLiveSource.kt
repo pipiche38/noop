@@ -142,12 +142,26 @@ class OuraLiveSource(
      *  switching the toggle off restores the default with nothing left on the ring. Twin of Swift's
      *  `notifyMaskFull`. */
     private val notifyMaskFull: () -> Boolean = { false },
+    /** #2242: persist one anchored 0x50 record's samples as `ouraMetSample` rows (one per minute) under
+     *  [deviceId] — wired to `repository.insertOuraMetSamples`; default no-op keeps the scanner + tests inert. */
+    private val persistMetSamples: (List<com.noop.data.OuraMetSampleEntity>) -> Unit = {},
+    /** #2242 (default OFF): read live per record — the writer runs only while this is true, so an install
+     *  that never turns the Experimental toggle on never grows the table. */
+    private val metCalories: () -> Boolean = { false },
     /** Diagnostic sink for the connect/auth/stream lifecycle - the SAME exportable strap log (#421).
      *  Every line is prefixed "Oura: ". Statuses / UUIDs / counts only, NEVER a device address. Default
      *  no-op keeps existing call sites compiling and tests silent. */
     private val log: (String) -> Unit = {},
     /** Fired with the ring's battery percent (0-100) when decoded. */
     private val onBattery: (Int) -> Unit = {},
+    /** Fired as the history drain starts `(true, 0)`, per `0x11` batch summary `(true, n)` and on EVERY path
+     *  the drain can end by `(false, n)` — [finishDrain], [stop] and a link drop mid-drain. Wired to the
+     *  live state's `backfilling` / `syncChunksThisSession`, the one pair every sync indicator reads (the
+     *  Today header capsule and chip, the Sleep and Live "Syncing…" states, the #1164 "Pending sync" Rest
+     *  caption); before this only the WHOOP offload ever raised them, so under a ring all of them stayed at
+     *  rest through every drain. Default no-op keeps the discovery-only scanner + tests inert. Twin of
+     *  Swift's `enterBackfilling` / `exitBackfilling`. */
+    private val onBackfilling: (Boolean, Int) -> Unit = { _, _ -> },
     /** Fired with the ring's TRUE model label ("Oura Ring 3/4/5") once the GetProductInfo hardware id
      *  resolves a generation on connect, so the app can correct a registry row mis-stamped from the
      *  advertised name (#772). Default no-op. Twin of Swift's `onModel`. */
@@ -305,6 +319,11 @@ class OuraLiveSource(
      *  `OuraRealStepsDump`. Null when there is no device id. */
     private val realStepsDump: OuraRealStepsDump? =
         if (deviceId.isNotEmpty()) OuraRealStepsDump(appContext, deviceId, log) else null
+
+    /** 0x81 CVA raw-PPG research corpus (Tier-B), for offline investigation. Kotlin twin of the Swift
+     *  `OuraCvaPpgDump`. Null when there is no device id. */
+    private val cvaPpgDump: OuraCvaPpgDump? =
+        if (deviceId.isNotEmpty()) OuraCvaPpgDump(appContext, deviceId, log) else null
     private val scanner: BluetoothLeScanner? get() = adapter?.bluetoothLeScanner
 
     private var gatt: BluetoothGatt? = null
@@ -455,6 +474,22 @@ class OuraLiveSource(
     private var writeChar: BluetoothGattCharacteristic? = null
     private var notifyChar: BluetoothGattCharacteristic? = null
 
+    /**
+     * When ANY notification last arrived on the notify characteristic — live push, banked record, debug
+     * frame, anything. Deliberately not [lastLivePulseAt]: the stall being detected is the whole channel
+     * going silent, not just the HR stream (healthy p99.9 inter-arrival gap: 4 s). Swift twin:
+     * `lastInboundAt`.
+     */
+    private var lastInboundAt: Long? = null
+
+    /** When the subscription was last toggled, so a genuinely silent ring cannot make us loop. */
+    private var lastSubscriptionToggleAt: Long? = null
+
+    /**
+     * True once the initial CCCD write of a session has driven [OuraTransition.Ready]. A RECOVERY
+     * re-enable must NOT re-run the auth handshake. Swift twin: `notifyReadyAnnounced`.
+     */
+    private var notifyReadyAnnounced = false
     // MARK: - Auth watchdog (#2304)
 
     /** When the most recent `get_nonce` of this session went out; null once the nonce arrived. */
@@ -504,8 +539,70 @@ class OuraLiveSource(
                     publishWearState()
                 }
             }
+            recoverStalledSubscriptionIfNeeded()
             // Reschedule only while a session is live; stop() clears reengageScheduled + removes callbacks.
             if (reengageScheduled) handler.postDelayed(this, reengageIntervalMs)
+        }
+    }
+
+    // MARK: - Stalled-subscription recovery (open_ring PROTOCOL.md s10-12)
+
+
+    /**
+     * Clear a stale-but-alive notify subscription by toggling it off and back on.
+     *
+     * WHY THIS EXISTS (measured 2026-08-10, capture `…-260810-1556`): across 2h31m at 96.6% connected the
+     * ring delivered NOTHING for seven stretches of 893-928 s while the link was up, the app was awake
+     * (59-60 live-HR re-arms inside each gap) and the ring was worn. The subscription was nominally active
+     * and delivering zero bytes; data resumed only when the periodic history fetch asked for it. open_ring
+     * hits the same wall and clears it the same way (disable, settle ~2.5 s, re-enable).
+     *
+     * Cheap and non-destructive: two CCCD writes, no ring command, no state-machine change. The re-enable
+     * deliberately does NOT re-run auth — see [notifyReadyAnnounced].
+     */
+    private fun recoverStalledSubscriptionIfNeeded() {
+        val g = gatt ?: return
+        val notify = notifyChar ?: return
+        val d = driver ?: return
+        if (!reachedStreaming) return
+        val now = System.currentTimeMillis()
+        val fire = shouldToggleSubscription(
+            msSinceInbound = lastInboundAt?.let { now - it },
+            msSinceToggle = lastSubscriptionToggleAt?.let { now - it },
+            isDraining = d.phase == OuraDriverPhase.FetchingHistory,
+        )
+        if (!fire) return
+        val quietSec = lastInboundAt?.let { (now - it) / 1000 } ?: -1
+        lastSubscriptionToggleAt = now
+        log("Oura: notify channel silent for ${quietSec}s while connected - toggling the subscription to clear a stalled stream")
+        setNotifyEnabled(g, notify, false)
+        handler.postDelayed({
+            val g2 = gatt ?: return@postDelayed
+            val n2 = notifyChar ?: return@postDelayed
+            if (!reachedStreaming) return@postDelayed
+            log("Oura: re-enabling notifications after the toggle")
+            setNotifyEnabled(g2, n2, true)
+        }, SUBSCRIPTION_TOGGLE_GAP_MS)
+    }
+
+    /** Enable/disable notifications on the notify characteristic, CCCD included, across API levels. */
+    private fun setNotifyEnabled(
+        g: BluetoothGatt,
+        notify: BluetoothGattCharacteristic,
+        enabled: Boolean,
+    ) = guardedCallback("notify-toggle") {
+        g.setCharacteristicNotification(notify, enabled)
+        val cccd = notify.getDescriptor(CCCD) ?: return@guardedCallback
+        val value = if (enabled) BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        else BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeDescriptor(cccd, value)
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                cccd.value = value
+                g.writeDescriptor(cccd)
+            }
         }
     }
 
@@ -671,7 +768,28 @@ class OuraLiveSource(
         pendingContinuation = false
         handler.removeCallbacks(batchQuietRunnable)
         log("Oura: fetching history from cursor $historyCursor [cursor-fix]")
+        enterBackfilling()
         advance(OuraTransition.StartHistoryFetch(cursor = historyCursor))
+    }
+
+    /** True while THIS source holds the live `backfilling` flag up, so it only ever lowers a flag it raised:
+     *  a `false` published on a ring disconnect must not cancel an offload some other source is publishing. */
+    private var publishedBackfilling = false
+    /** Batches answered this drain — the chunk tally the header capsule and its VoiceOver label count. */
+    private var drainChunks = 0
+
+    private fun enterBackfilling() {
+        publishedBackfilling = true
+        drainChunks = 0
+        onBackfilling(true, 0)
+    }
+
+    /** The counterpart, on EVERY path a drain can end by; a flag left up after the link dropped would hold
+     *  the header in "Syncing" until the next drain lowered it. */
+    private fun exitBackfilling() {
+        if (!publishedBackfilling) return
+        publishedBackfilling = false
+        onBackfilling(false, drainChunks)
     }
 
     private fun scheduleHistoryFetch() {
@@ -695,6 +813,8 @@ class OuraLiveSource(
     private fun handleHistorySummary(summary: com.noop.oura.GetEventsSummary): Unit = guardedCallback("history-summary") {
         val elapsed = drainStartedAtMs?.let { (System.currentTimeMillis() - it) / 1000.0 } ?: 0.0
         val continueDrain = drain.onSummary(summary.bytesLeft, summary.moreData, elapsed)
+        // One GetEvents batch answered = one chunk, the unit the header capsule and VoiceOver count.
+        if (publishedBackfilling) { drainChunks += 1; onBackfilling(true, drainChunks) }
         if (summary.moreData && !continueDrain) {
             val reason = if (elapsed > OuraHistoryDrain.MAX_DRAIN_SECONDS) {
                 "exceeded ${OuraHistoryDrain.MAX_DRAIN_SECONDS.toInt()}s deadline"
@@ -759,6 +879,9 @@ class OuraLiveSource(
         // two lines after "not a reboot (#2097)" and burn a chained pass that only re-read the kept cursor.
         val rebootFullPullPending = commitResumeCursor(completed)
         advance(OuraTransition.HistoryCursorAdvanced(cursor = historyCursor, moreData = false))
+        // Down here, before the chain / completion branch: a chained pass (below) raises it again 5 s
+        // later, and the Swift twin lowers it before its completed-offload stamp for the same reason.
+        exitBackfilling()
         if (rebootFullPullPending || resumeBacklog) {
             if (chainedDrainPasses >= MAX_CHAINED_DRAIN_PASSES) {
                 log("Oura: drain pass cap ($MAX_CHAINED_DRAIN_PASSES) reached with work remaining - " +
@@ -1324,6 +1447,7 @@ class OuraLiveSource(
         handler.removeCallbacks(chainedDrainRunnable)
         pendingContinuation = false
         chainedDrainPasses = 0
+        exitBackfilling()             // a drain cut by the teardown must not leave the header "Syncing"
         // Drain BEFORE driver.stop() clears its anchor, so a pending event still gets a real anchored time
         // if one exists rather than always falling back to wall-clock at teardown (mirrors Swift's stop()).
         // Same for a hypnogram burst still accumulating (e.g. the session ended mid-drain); one that never
@@ -1350,6 +1474,9 @@ class OuraLiveSource(
         gatt = null
         writeChar = null
         notifyChar = null
+        notifyReadyAnnounced = false
+        lastInboundAt = null
+        lastSubscriptionToggleAt = null
         reassembler.reset()
         loggedFirstHr = false      // a later reconnect should log its first sample again
         loggedFirstTemp = false
@@ -1496,6 +1623,7 @@ class OuraLiveSource(
                     handler.removeCallbacks(batchQuietRunnable)
                     handler.removeCallbacks(chainedDrainRunnable)
                     pendingContinuation = false
+                    exitBackfilling()   // a drain cut by the drop must not leave the header "Syncing"
                     // Drain BEFORE the driver's anchor is gone (same reasoning as stop()): a pending event
                     // still gets a real anchored time if the current session set one, else an honest
                     // wall-clock fallback rather than being silently dropped. A hypnogram burst still
@@ -1595,6 +1723,14 @@ class OuraLiveSource(
                 return@guardedCallback
             }
             if (status == BluetoothGatt.GATT_SUCCESS) {
+                // A stalled-stream RECOVERY re-enable lands here too, and must NOT re-run auth: the secure
+                // session is already established, and replaying Ready would restart the nonce handshake
+                // mid-session. Swift twin: the `notifyReadyAnnounced` guard.
+                if (notifyReadyAnnounced) {
+                    log("Oura: notifications re-enabled (status=$status) after a stall toggle")
+                    return@guardedCallback
+                }
+                notifyReadyAnnounced = true
                 log("Oura: notifications enabled (CCCD write status=$status) - beginning auth")
                 // Notifications are live: tell the driver we are Ready. It returns the enable-notify +
                 // get-nonce commands (or drives the honest needs-pairing path when there is no app key).
@@ -1610,14 +1746,21 @@ class OuraLiveSource(
             ch: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
-            if (ch.uuid == NOTIFY_UUID) handleNotification(value)
+            if (ch.uuid == NOTIFY_UUID) {
+                lastInboundAt = System.currentTimeMillis()
+                handleNotification(value)
+            }
         }
 
         // Legacy (< API 33) characteristic-changed callback: read the value off the characteristic.
         @Deprecated("Deprecated in Java")
         @Suppress("DEPRECATION")
         override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
-            if (ch.uuid == NOTIFY_UUID) handleNotification(ch.value ?: return)
+            if (ch.uuid == NOTIFY_UUID) {
+                val v = ch.value ?: return
+                lastInboundAt = System.currentTimeMillis()
+                handleNotification(v)
+            }
         }
     }
 
@@ -2223,6 +2366,25 @@ class OuraLiveSource(
                         ringTs = e.value.ringTimestamp, utc = utc, state = e.value.state,
                         secPerSample = 60, met = e.value.met, // 60 s = assumed MET cadence (s6.13)
                     )
+                    // #2242: persist the record as one row per minute when the Experimental MET-calories
+                    // toggle is on (anchored records only, same rule as the sidecar; the (deviceId, ts) key
+                    // absorbs a re-serve). The record's timestamp is the END of its LAST sample: fitted
+                    // against Oura's own per-minute export, every record length n matched best at exactly
+                    // −n minutes (85 % exact minute matches, r 0.90 — vs 23 % / 0.57 read forward from the
+                    // timestamp), so sample i starts at `utc − (n − i) × epoch`. A record straddling local
+                    // midnight therefore lands its minutes on the right days.
+                    if (metCalories() && e.value.met.isNotEmpty()) {
+                        val epoch = 60
+                        val n = e.value.met.size
+                        persistMetSamples(
+                            e.value.met.mapIndexed { i, met ->
+                                com.noop.data.OuraMetSampleEntity(
+                                    deviceId = deviceId, ts = utc - (n - i).toLong() * epoch,
+                                    met = met, state = e.value.state, epochS = epoch,
+                                )
+                            },
+                        )
+                    }
                 }
             }
             is OuraEvent.RealStepsFields -> {
@@ -2267,6 +2429,20 @@ class OuraLiveSource(
                         "motion=${v.motionCount} state=${v.sleepState}",
                 )
                 enqueueAnchoredOrPark(e, v.ringTimestamp, d)
+            }
+            is OuraEvent.CvaRawPpg -> {
+                // INVESTIGATION ONLY (0x81 CVA raw PPG, Tier B - a plausible third-party [open_ring]
+                // formula, NOT ground-truth-validated; see OuraCvaPpg). Logged once per kind (like the
+                // other raw Tier-B tags) rather than every occurrence - this stream runs at a much higher
+                // rate than 0x50 MET, so the JSONL corpus is the real record; the strap log just confirms
+                // the ring sends it at all. Never persisted, never scored (OuraStreamMapping drops
+                // CvaRawPpg unconditionally).
+                if (loggedTierBKinds.add("cva_raw_ppg")) {
+                    log("Oura: Tier-B cva_raw_ppg seen (tag 0x81) - first values: ${e.value.values}")
+                }
+                d.unixSeconds(forRingTimestamp = e.value.ringTimestamp)?.let { utc ->
+                    cvaPpgDump?.record(ringTs = e.value.ringTimestamp, utc = utc, values = e.value.values)
+                }
             }
             is OuraEvent.MotionVectorEvent -> {
                 // 0x47 averaged accel vector (Tier-A). Persisted as an OURA_MOTION event (same event-table
@@ -2519,6 +2695,46 @@ class OuraLiveSource(
     }
 
     companion object {
+
+        /**
+         * How long the notify channel must be COMPLETELY silent, while connected and idle-streaming,
+         * before the subscription is treated as stale. Chosen from measurement rather than open_ring's
+         * 30 s: over 7,493 inter-arrival gaps inside live sessions on the 2026-08-10 capture the p99.9 gap
+         * is 4 s and the largest healthy gap is 4 s, while every real stall was 893-928 s. Nothing falls
+         * between, so 60 s sits in an empty band 15x above normal and still fires 240 s before the 300 s
+         * history fetch would mask the stall by pulling the backlog itself.
+         */
+        const val SUBSCRIPTION_STALL_TIMEOUT_MS = 60_000L
+
+        /** Floor between two toggles, so a genuinely silent ring costs one toggle per window, not a loop. */
+        const val SUBSCRIPTION_TOGGLE_FLOOR_MS = 120_000L
+
+        /** Settle time between disabling and re-enabling notifications — open_ring's value. */
+        const val SUBSCRIPTION_TOGGLE_GAP_MS = 2_500L
+
+        /**
+         * Pure policy, twin of Swift's `OuraLiveSource.shouldToggleSubscription`, kept static so it is
+         * testable without a BluetoothGatt.
+         *
+         * @param msSinceInbound age of the last notification of any kind, null if none has ever arrived.
+         * @param msSinceToggle age of the last toggle, null if we have not toggled this session.
+         * @param isDraining a history fetch is in flight (its traffic proves the channel is alive).
+         */
+        @JvmStatic
+        fun shouldToggleSubscription(
+            msSinceInbound: Long?,
+            msSinceToggle: Long?,
+            isDraining: Boolean,
+        ): Boolean {
+            // A drain IS inbound traffic; never interrupt one to "fix" the channel it is using.
+            if (isDraining) return false
+            // Nothing has ever arrived: that is the auth/handshake path's problem, not a stalled stream.
+            val quiet = msSinceInbound ?: return false
+            if (quiet <= SUBSCRIPTION_STALL_TIMEOUT_MS) return false
+            val sinceToggle = msSinceToggle ?: return true
+            return sinceToggle >= SUBSCRIPTION_TOGGLE_FLOOR_MS
+        }
+
         /** The ring's base service + write/notify characteristics (OURA_PROTOCOL.md s1.1). Built from the
          *  protocol package's UUID strings so the facts live in exactly one place. */
         val SERVICE_UUID: UUID = UUID.fromString(OuraGatt.serviceUUID)

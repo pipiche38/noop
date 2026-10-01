@@ -236,6 +236,47 @@ You can also open the generated project interactively:
 open Strand.xcodeproj
 ```
 
+### Xcode running away with memory after a project regenerate
+
+Regenerating the project (`xcodegen generate`, on either `project.yml` or `project.free.yml`)
+invalidates Xcode's index, so the next open forces a full, cold re-index across every package
+(`WhoopProtocol`, `OuraProtocol`, `PolarProtocol`, `WhoopStore`, `StrandAnalytics`, `StrandImport`,
+`StrandDesign`, GRDB, cmark-gfm, …) plus both app targets. On a project this size that can run
+`SourceKitService`'s memory up far enough for macOS to suspend Xcode outright — this is a known
+Xcode behavior on large multi-package projects, not specific to a change you made.
+
+If Xcode is already stuck:
+
+```bash
+killall Xcode 2>/dev/null
+killall SourceKitService 2>/dev/null   # safe — Xcode restarts it fresh, only losing index state
+```
+
+To cap it going forward:
+
+```bash
+# Cap parallel compile jobs — each Swift frontend process is memory-hungry, and XCBuild will
+# otherwise try to run one per core across every package. Pick a number <= half your core count;
+# remove the key to go back to default parallelism.
+defaults write com.apple.dt.Xcode IDEBuildOperationMaxNumberOfConcurrentCompileTasks 2
+
+# Disable background indexing entirely while you just need to build/flash (trades away
+# autocomplete/jump-to-definition until you set this back to 0).
+defaults write com.apple.dt.Xcode IDEIndexDisable 1
+```
+
+Clearing caches for a clean slate also helps, and clears the specific `cmark-gfm`
+explicit-module-cache race noted in `CLAUDE.md`:
+
+```bash
+rm -rf ~/Library/Developer/Xcode/DerivedData/*
+rm -rf /tmp/SwiftExplicitPrecompiledModules
+```
+
+If it recurs mid-session, check Activity Monitor for `SourceKitService` specifically — it's almost
+always the process actually leaking, not `Xcode` itself, and can be killed on its own without
+losing any unsaved work.
+
 ### 6. Re-importing data into the on-device DB
 
 The on-device SQLite database lives inside the app sandbox container:

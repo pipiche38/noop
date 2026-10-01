@@ -383,6 +383,15 @@ class OuraStreamMappingTest {
                 OuraEvent.RealStepsFields(
                     com.noop.oura.OuraRealStepsFields(tag = 0x7E, ringTimestamp = 100, fields = (0..13).toList()),
                 ),
+                // 0x81 CVA raw PPG: decoded but Tier-B/unvalidated (third-party [open_ring] formula) -
+                // must never leak a value into a durable stream either.
+                OuraEvent.CvaRawPpg(
+                    com.noop.oura.OuraCvaPpg(ringTimestamp = 100, values = listOf(395015, 394873)),
+                ),
+                // 0x6A sleep_period_info is deliberately NOT in this list: it does produce one durable
+                // row (`breath` -> resp, see the sleepPeriodInfoMapsBreathToRespirationAndNothingElse
+                // test below). `averageHrBpm` must still never join the beat-derived HR series, asserted
+                // there.
             ),
             anchor,
         )
@@ -392,7 +401,6 @@ class OuraStreamMappingTest {
         assertTrue(s.battery.isEmpty())
         assertTrue(s.spo2.isEmpty())
         assertTrue(s.skinTemp.isEmpty())
-        assertTrue(s.resp.isEmpty())
     }
 
     // MARK: - 0x6A sleep_period_info -> respiration instrumentation

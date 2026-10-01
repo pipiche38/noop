@@ -271,6 +271,8 @@
     <string name="timeline_min">MIN</string>
     <string name="timeline_avg">AVG</string>
     <string name="timeline_max">MAX</string>
+    <!-- Movement's total active time in the shown span (sum of every 0x47 window's own motion_seconds) -->
+    <string name="timeline_active">ACTIVE</string>
     <string name="timeline_empty_metric">No %1$s here</string>
     <string name="timeline_nothing_offloaded">Nothing offloaded for this window yet.</string>
     <string name="timeline_other_sources_no_offload">Other sources don\'t offload raw per-second data on-device.</string>
@@ -2880,4 +2882,6 @@
     <string name="raw_diag_ecg_probe_start">Start ECG capture</string>
     <string name="raw_diag_ecg_probe_stop">Stop ECG capture</string>
     <string name="raw_diag_ecg_probe_running">A capture may still be running on this strap. The verdict goes to the strap log.</string>
+    <string name="settings_oura_met_calories_title">Active calories from the ring\'s MET stream</string>
+    <string name="settings_oura_met_calories_caption">Uses Oura\'s documented method: each minute\'s intensity above 1.5 MET, at the standard MET rate for your weight, on top of resting energy for the minutes the ring reported. An estimate, not a measurement — on a day without a logged workout it matches the Oura app\'s own figure (Oura re-scores a logged workout\'s minutes by activity type, which NOOP does not), and a day the ring covered less than half of shows no number rather than a guess. Turning this on also starts storing the ring\'s MET samples on this device; it never feeds recovery or illness scoring. Off by default.</string>
 </resources>

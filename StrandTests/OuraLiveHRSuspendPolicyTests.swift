@@ -153,6 +153,40 @@ extension OuraLiveHRSuspendPolicyTests {
             screenOffAt: screenOff, now: pastGrace, delay: 300, allDay: .on(band: nil, nowSecOfDay: 12 * 3_600)))
     }
 
+    /// Schedule not read yet since launch: decides exactly like cold start — grace, then the screen rule —
+    /// and presence still wins.
+    func testLoadingKeepsTheScreenRule() {
+        XCTAssertTrue(OuraLiveSource.shouldSuspendLiveHR(
+            screenOffAt: screenOff, now: pastGrace, delay: 300, allDay: .loading))
+        XCTAssertFalse(OuraLiveSource.shouldSuspendLiveHR(
+            screenOffAt: screenOff, now: screenOff.addingTimeInterval(60), delay: 300, allDay: .loading))
+        XCTAssertFalse(OuraLiveSource.shouldSuspendLiveHR(
+            screenOffAt: nil, now: pastGrace, delay: 300, allDay: .loading))
+    }
+
+    /// The band-end line is claimed only for a suspend a band held. A screen-off relaunch in the morning
+    /// suspends while the schedule loads; its release when the band arrives must not read as a night ending.
+    func testResumeReasonAttributesOnlyWhatHeldTheSuspend() {
+        let at = "08:25"
+        XCTAssertEqual(
+            OuraLiveSource.standDownResumeReason(.on(band: night, nowSecOfDay: 8 * 3_600 + 1_500),
+                                                 suspendedWithoutBand: false, at: at),
+            "night stand-down 21:30–07:30 ended at 08:25 (all-day HR on)")
+        XCTAssertEqual(
+            OuraLiveSource.standDownResumeReason(.on(band: night, nowSecOfDay: 8 * 3_600 + 1_500),
+                                                 suspendedWithoutBand: true, at: at),
+            "sleep schedule available at 08:25, outside the night stand-down 21:30–07:30 (all-day HR on)")
+        XCTAssertEqual(
+            OuraLiveSource.standDownResumeReason(.off, suspendedWithoutBand: true, at: at),
+            "all-day HR turned off")
+        XCTAssertEqual(
+            OuraLiveSource.standDownResumeReason(.on(band: nil, nowSecOfDay: 0), suspendedWithoutBand: true, at: at),
+            "no learned sleep schedule at 08:25 (all-day HR on)")
+        XCTAssertEqual(
+            OuraLiveSource.standDownResumeReason(.loading, suspendedWithoutBand: true, at: at),
+            "sleep schedule not loaded yet at 08:25 (all-day HR on)")
+    }
+
     /// The band the app layer hands the policy is the learner's own (midsleep ± half the typical night, ±1 h).
     func testBandComesFromTheLearnedSchedule() {
         let band = NightStandDown.band(habitualMidsleepSec: 2 * 3_600 + 1_800, typicalSleepHours: 8)

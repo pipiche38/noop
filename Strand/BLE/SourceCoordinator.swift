@@ -60,6 +60,9 @@ final class SourceCoordinator: ObservableObject {
     /// Item 27: the learned night band an Oura ring's all-day HR hold stands down for (nil = cold start).
     /// Read at each decision by `OuraLiveSource`; the app layer derives it from the sleep learner.
     private let ouraNightBand: () -> NightStandDown.Band?
+    /// Item 27: true until the app's first read of the band's inputs since launch has completed, so the
+    /// ring's launch-time reconnect can tell "not loaded yet" from a real cold start.
+    private let ouraNightBandPending: () -> Bool
 
     // MARK: - State
 
@@ -81,6 +84,12 @@ final class SourceCoordinator: ObservableObject {
     /// nothing else. Cleared as soon as it is consumed (or when adopt is cancelled), so a later reconnect of
     /// the same ring is a normal read-only session that never re-installs a key.
     private var pendingAdoptDeviceId: String?
+    /// The deviceId + candidate keys for a pending Advanced key trial (the wizard's "I already have my ring's
+    /// key(s)" path). The NEXT bring-up of THIS Oura ring starts a `beginKeyTrial` with these candidates
+    /// instead of a plain connect, so NOOP verifies each key against the ring and keeps the first that
+    /// authenticates. Consumed (cleared) the moment the trial starts. This is a NON-destructive, read-only
+    /// verification — no adopt consent is granted here, so it can never install a key.
+    private var pendingTrial: (deviceId: String, keys: [Data])?
     /// The deviceId the active non-WHOOP source (`activeSource`) runs for.
     private var activeStrapId: String?
     /// True once we've transitioned onto a generic strap. While false (the default / WHOOP-active
@@ -120,7 +129,8 @@ final class SourceCoordinator: ObservableObject {
          setWhoopActiveDeviceId: @escaping (String) -> Void,
          connectedPeripheralUUID: AnyPublisher<String?, Never>,
          straplog: @escaping (String) -> Void = { _ in },
-         ouraNightBand: @escaping () -> NightStandDown.Band? = { nil }) {
+         ouraNightBand: @escaping () -> NightStandDown.Band? = { nil },
+         ouraNightBandPending: @escaping () -> Bool = { false }) {
         self.registry = registry
         self.live = live
         self.storeHandle = storeHandle
@@ -131,6 +141,7 @@ final class SourceCoordinator: ObservableObject {
         self.connectedPeripheralUUID = connectedPeripheralUUID
         self.straplog = straplog
         self.ouraNightBand = ouraNightBand
+        self.ouraNightBandPending = ouraNightBandPending
     }
 
     // MARK: - Wiring
@@ -275,11 +286,19 @@ final class SourceCoordinator: ObservableObject {
         // concrete driver), then bring it up. `.liveAppleWatch` never reaches here — it's short-circuited
         // above — so `makeSource` only ever sees a real BLE source kind.
         let source = makeSource(for: id)
-        // CONNECT to the active strap's known peripheral, don't just scan. scan() only discovered + listed
-        // it but never connected, so a Polar etc. showed as "found" yet never streamed (#421). connect()
-        // reaches the cached peripheral by identifier (or scans-then-connects if not yet cached); a bare
-        // scan is the fallback only when the registry row has no/invalid identifier.
-        if let pid = peripheralId(for: id), let uuid = UUID(uuidString: pid) {
+        let target = peripheralId(for: id).flatMap { UUID(uuidString: $0) }
+        // An armed Advanced key trial for THIS Oura ring brings the source up via `beginKeyTrial` instead of
+        // a plain connect, so NOOP verifies each candidate key against the ring and keeps the first that
+        // authenticates (nothing is saved until one works). Needs a known peripheral to reach — the wizard
+        // only arms a trial after the user has picked a scanned ring, so `target` is always set here.
+        if let oura = source as? OuraLiveSource, let trial = pendingTrial, trial.deviceId == id, let uuid = target {
+            pendingTrial = nil
+            oura.beginKeyTrial(trial.keys, connectTo: uuid)
+        } else if let uuid = target {
+            // CONNECT to the active strap's known peripheral, don't just scan. scan() only discovered + listed
+            // it but never connected, so a Polar etc. showed as "found" yet never streamed (#421). connect()
+            // reaches the cached peripheral by identifier (or scans-then-connects if not yet cached); a bare
+            // scan is the fallback only when the registry row has no/invalid identifier.
             source.connect(uuid)
         } else {
             source.scan()
@@ -394,24 +413,54 @@ final class SourceCoordinator: ObservableObject {
                 Task {
                     guard let store = await storeHandle() else { return }
                     // #1284 duplicate-generation diagnostic (LOG-ONLY, no behaviour change). The in-source
-                    // `duplicate-gen(#1284)` line compares against a PER-CONNECTION memory list, so it is
-                    // blind to the common case: an overnight with link drops mints the duplicate across
-                    // DIFFERENT connections. Read the day's stored sessions here instead (cross-connection,
+                    // `duplicate-gen(#1284)` line compares against a PER-CONNECTION memory list, which is a
+                    // genuine blind spot for duplicates minted across DIFFERENT connections (an overnight
+                    // with link drops). Read the day's stored sessions here instead (cross-connection,
                     // survives an app restart) and log — using the SAME `SleepSessionDedup.isDuplicate` rule
-                    // the heal uses — when this persist duplicates one. `startDelta` is END-ANCHOR DRIFT, NOT
-                    // 0x49 onset jitter: startTs is `end − laidCodes·30 s`, and the 0x49 onset is applied only
-                    // as a one-way PRE-onset clip (OuraLiveSource `sleepStart`), which does not bind when the
-                    // backward lay never reaches it — so every row can be tagged `[0x49-onset]` yet none start
-                    // AT the onset (08-16: 4,206 s startDelta over 21 s of real onset jitter). The two shapes
-                    // say WHICH row is fuller. One compact line per duplicate, to survive the log head-clip;
-                    // this is the corpus the generation-side 0x49-onset keying will be designed against.
+                    // the heal uses — when this persist duplicates one. One compact line per duplicate, to
+                    // survive the log head-clip. This is the corpus the generation-side 0x49/sleep-day
+                    // keying will be designed against.
+                    //
+                    // NOT "the per-connection line is blind to the common case" — that was our own claim on
+                    // 2026-08-13 and the very next night falsified it: the in-source line FIRED on 08-13/14,
+                    // same drain, same connection, two persists four seconds apart. Same-connection
+                    // duplicates do occur and the shipped diagnostic does catch them; this read covers the
+                    // cross-connection ones it cannot see.
+                    //
+                    // `startDelta` is NOT 0x49 onset jitter, and `startTs` is NOT the anchored onset.
+                    // Both halves of what this diagnostic originally said are falsified by the corpus in
+                    // analysis/2026-08-14-duplicate-gen-keying-corpus.txt (§S3, night 08-15/16):
+                    //
+                    //   - `startTs` is `end − laidCodes × 30 s`. The 0x49 onset is applied only as a ONE-WAY
+                    //     CLIP of pre-onset codes (`OuraLiveSource.persistHypnogramBurst`). On that night the
+                    //     lay never reached back far enough for the clip to bind, so all six persists are
+                    //     tagged `[0x49-onset]` and NOT ONE of them starts at the onset.
+                    //   - The ring's onset is in fact the steadiest number in the capture: 21 s of spread
+                    //     over 11 servings (+55…+76 s from WHOOP's own). What moves is the END — the ring
+                    //     reports "sleep began N minutes before this event and ends AT this event", with
+                    //     `endOffset` 0 on every serving, so N grows as the event advances and the whole
+                    //     368-minute block slides forward with it. Observed `startDelta` reaches 4,206 s
+                    //     against 21 s of onset jitter: two orders of magnitude apart.
+                    //
+                    // So this number measures END-ANCHOR DRIFT. Two shapes it comes in (§2 of the same file):
+                    // a RE-ANCHOR duplicate is the SAME hypnogram laid from two ends, identical seg/byte
+                    // counts (08-12/13: exactly 554 s at every boundary; 08-15/16: five byte-identical
+                    // 368 min / 51 seg / 2,724 B rows); a PARTIAL-DRAIN duplicate is a genuinely shorter
+                    // decode whose stages DIVERGE from the fuller row (08-13/14, deep vs light at segment 5).
+                    // The two shapes printed on this line are what tell them apart, and the fuller row is the
+                    // WHOOP-matching one on every night in the corpus.
+                    //
+                    // ⚠️ Do not size a quantise grid from any of these deltas. Across five nights the spread
+                    // is 242 / 376 / 554 / 2,469 / 4,206 s. A 30-min grid collapses 1 of 5 — 08-11/12's two
+                    // starts are 376 s apart and still straddle 22:30 — while `sleepDay(noon)` collapses
+                    // 5 of 5 and the ring's own 0x49 onset collapses the one night it was measured on.
                     let from = session.startTs - 16 * 3600 - 3600
                     let to = session.endTs + 3600
                     // UNFILTERED window read: the keying guard MUST see a row already at the candidate's keyed
                     // startTs (the common same-bucket collision). The dup-gen diagnostic excludes it inline.
                     let stored = (try? await store.sleepSessions(deviceId: id, from: from, to: to, limit: 64)) ?? []
                     for e in stored where e.startTs != session.startTs && SleepSessionDedup.isDuplicate(session, e) {
-                        straplog("Oura: dup-gen(#1284) persist \(SourceCoordinator.dupGenShape(session)) duplicates stored \(SourceCoordinator.dupGenShape(e)) startDelta=\(session.startTs - e.startTs)s (end-anchor drift) - cross-connection DB read")
+                        straplog("Oura: dup-gen(#1284) persist \(SourceCoordinator.dupGenShape(session)) duplicates stored \(SourceCoordinator.dupGenShape(e)) startDelta=\(session.startTs - e.startTs)s (end-anchor drift, NOT 0x49 onset jitter) - cross-connection DB read")
                     }
                     if UserDefaults.standard.bool(forKey: AppModel.ouraOnsetKeyingKey) {
                         // #1284 residual 3 (EXPERIMENTAL): completeness-guarded onset keying — suppress or
@@ -440,8 +489,13 @@ final class SourceCoordinator: ObservableObject {
                     }
                 }
             },
+            persistMetSamples: { [storeHandle] rows in   // #2242
+                Task { if let store = await storeHandle() { _ = try? await store.insertOuraMetSamples(rows, deviceId: id) } }
+            },
+            metCalories: { UserDefaults.standard.bool(forKey: AppModel.ouraMetCaloriesKey) },   // #2242
             allDayLiveHR: { UserDefaults.standard.bool(forKey: AppModel.ouraAllDayLiveHRKey) },   // item 27
             nightBand: ouraNightBand,   // item 27
+            nightBandPending: ouraNightBandPending,
             log: straplog,
             onBattery: { [live] pct in live.setBattery(Double(pct)) },
             onModel: { [registry] model in registry.setModel(id, model: model) },   // #772: correct a name-guessed gen
@@ -496,6 +550,25 @@ final class SourceCoordinator: ObservableObject {
     /// reconnect the device it is showing — never a WHOOP, never a ring that is not active.
     func reconnectActiveRing() {
         ouraSource?.reconnect()
+    }
+
+    /// Arm an Advanced key trial for `deviceId`: the NEXT bring-up of this Oura ring verifies each candidate
+    /// key against it (via `OuraLiveSource.beginKeyTrial`) and keeps the first that authenticates. Called by
+    /// the wizard immediately before it registers the ring active. This grants NO adopt consent — the trial
+    /// is a non-destructive read-only verification that never installs a key (a wrong candidate just fails
+    /// auth and the next is tried).
+    func requestOuraKeyTrial(deviceId: String, keys: [Data]) {
+        // Re-verifying the SAME ring that is already the live active source (e.g. after an exhausted trial,
+        // the user edited the keys and tried again) won't re-run `switchToStrap` — a make-active for the
+        // already-active id early-returns. Start the trial directly on the live source in that case; else
+        // stash it for the next bring-up (`switchToStrap` consumes it).
+        if let oura = ouraSource, activeStrapId == deviceId,
+           let pid = peripheralId(for: deviceId), let uuid = UUID(uuidString: pid) {
+            pendingTrial = nil
+            oura.beginKeyTrial(keys, connectTo: uuid)
+        } else {
+            pendingTrial = (deviceId, keys)
+        }
     }
 
     /// Stop the live non-WHOOP source (standard strap, FTMS machine, Huami device, or Oura ring) and drop
