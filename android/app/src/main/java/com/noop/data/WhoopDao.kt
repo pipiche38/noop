@@ -98,14 +98,27 @@ internal const val DAY_STREAM_FINGERPRINT_SQL =
 internal const val SCORABLE_OURA_CHANNELS = "(1, 3, 4)"
 
 /** Shared production SQL used by Room and the SQLite repository contract tests. The SCORING read: see
- *  [WhoopDao.rrIntervals] for the one-Oura-channel selection. Twin of Swift `WhoopStore.rrIntervals`. */
+ *  [WhoopDao.rrIntervals] for the one-Oura-channel selection. Twin of Swift `WhoopStore.rrIntervals`.
+ *
+ *  The Oura channel is chosen per UTC HOUR of the requested window, not once for the whole window: 0x60
+ *  is banked only overnight and 0x80 carries every daytime beat, so one whole-window count let a night's
+ *  0x60 outvote the day's 0x80 on any read that crossed wake and dropped every daytime beat. An hour where
+ *  both fire keeps the fuller one; an hour where only one fires keeps it. A window inside one hour reads
+ *  exactly as the whole-window rule did. LEFT JOIN so NULL and non-Oura rows pass whether or not their hour
+ *  has a choice; the outer table stays unaliased so its column names read as in the other queries.
+ *  Deliberately NOT `AS MATERIALIZED`, unlike the Swift twin, for the minSdk reason on
+ *  [WHOOP4_RR_INTERVALS_SQL]. */
 internal const val RR_INTERVALS_SQL =
-    "SELECT * FROM rrInterval WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +
+    "WITH ouraHourChoice AS (" +
+    "SELECT ts / 3600 AS hour, SUM(srcChannel = 1) > SUM(srcChannel <> 1) AS keepGreen " +
+    "FROM rrInterval WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +
+    "AND srcChannel IN " + SCORABLE_OURA_CHANNELS + " " +
+    "AND (tsSuspect IS NULL OR tsSuspect <> 1) GROUP BY ts / 3600) " +
+    "SELECT rrInterval.* FROM rrInterval LEFT JOIN ouraHourChoice h ON h.hour = rrInterval.ts / 3600 " +
+    "WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +
     "AND (srcChannel IS NULL OR srcChannel <> 2) " +
-    "AND (srcChannel IS NULL OR srcChannel NOT IN " + SCORABLE_OURA_CHANNELS + " OR (srcChannel = 1) = (" +
-    "SELECT SUM(srcChannel = 1) > SUM(srcChannel <> 1) FROM rrInterval " +
-    "WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to AND srcChannel IN " + SCORABLE_OURA_CHANNELS + " " +
-    "AND (tsSuspect IS NULL OR tsSuspect <> 1))) " +
+    "AND (srcChannel IS NULL OR srcChannel NOT IN " + SCORABLE_OURA_CHANNELS + " " +
+    "OR (srcChannel = 1) = h.keepGreen) " +
     "AND (tsSuspect IS NULL OR tsSuspect <> 1) " +
     "ORDER BY ts ASC, ord ASC, rrMs ASC, seq ASC LIMIT :limit"
 

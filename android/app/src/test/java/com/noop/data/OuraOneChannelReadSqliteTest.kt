@@ -81,6 +81,24 @@ class OuraOneChannelReadSqliteTest {
         assertEquals(listOf(880, 881), read(RR_INTERVALS_SQL, ts + 250, ts + 350).map { it.first })
     }
 
+    /** A window that crosses wake: per UTC hour, the night keeps 0x60, the green-only hour keeps 0x80,
+     *  and a mixed hour keeps the fuller one. Swift twin `testTheChannelIsChosenPerHourAcrossANightAndADay`,
+     *  fixture and expected values verbatim. */
+    @Test fun theChannelIsChosenPerHourAcrossANightAndADay() {
+        val hour0 = 1_750_003_200L
+        for (i in 0 until 12) insert(hour0 + i, 1000 + i, 3)
+        for (i in 0 until 4) insert(hour0 + 2 * i, 900 + i, 1)
+        for (i in 0 until 12) insert(hour0 + i, 1000 + 8 * i, 2)
+        insert(hour0 + 100, 777, null)
+        for (i in 0 until 5) insert(hour0 + 3600 + i, 880 + i, 1)
+        for (i in 0 until 3) insert(hour0 + 7200 + 2 * i, 600 + i, 1)
+        for (i in 0 until 6) insert(hour0 + 7200 + i, 1300 + i, 3)
+        val read = read(RR_INTERVALS_SQL, hour0, hour0 + 3 * 3600)
+        assertEquals(listOf(1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 1011,
+            777, 880, 881, 882, 883, 884, 1300, 1301, 1302, 1303, 1304, 1305), read.map { it.first })
+        assertEquals(List(12) { 3 } + listOf(0) + List(5) { 1 } + List(6) { 3 }, read.map { it.second ?: 0 })
+    }
+
     @Test fun aChannelTieResolvesToTheAmplitudeFamily() {
         for (i in 0 until 3) {
             insert(ts + i, 900 + i, 1)
