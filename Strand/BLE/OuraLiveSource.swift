@@ -2047,6 +2047,27 @@ public final class OuraLiveSource: NSObject, ObservableObject {
 
     // MARK: - Live ingest
 
+    /// ALWAYS-ON evidence (deliberately not Test-Centre-gated): a notification LONGER than one BLE
+    /// packet that the strict tiling rejected, so `OuraReassembler.feed` kept its first packet and read
+    /// no record from the rest of the value. Under the `3f` mask that fallback was the correct answer,
+    /// because a notification was a single <= 20-byte packet; under the official app's `ff` the ring
+    /// packs 10-17 records per notification, so the same fallback drops 9-16 of them and the loss is
+    /// invisible - a history drain that looks like it worked and banks a tenth of the records
+    /// (OURA_PROTOCOL.md s2.3). It costs a line only when it happens, and it is what is missing when
+    /// someone reports thin history with no Test Centre enabled.
+    ///
+    /// Reports only what it can attribute: the notification's length, its first 4 bytes (tag, `len` and
+    /// two timestamp bytes - no payload, so no measurement of the wearer), how many of its bytes no
+    /// record covered, and this session's running count. The reassembler rate-limits the reports (the
+    /// first few, then one per decade), so a ring that packs nothing readable cannot flood the
+    /// ring-buffered strap log. Twin of Kotlin's `reportPackedTilingFailures`.
+    private func reportPackedTilingFailures() {
+        for f in reassembler.takePackedTilingFailures() {
+            let head = f.head.map { String(format: "%02x", $0) }.joined(separator: " ")
+            log("Oura: packed notification did not tile - \(f.length)B, head \(head), \(f.unreadBytes)B of it unread, #\(f.count) this session - kept the first packet only")
+        }
+    }
+
     /// Fold TLV records decoded from the notify stream — these are HISTORY-LOG records (the live-HR path
     /// is `ingestLiveHRPush`): every envelope ring-time advances the drain's in-session continuation
     /// cursor (open_oura `drain_events` tracks the max timestamp of EVERY batch event), and while a
@@ -3302,6 +3323,7 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
                 }
                 observeUserInfoRecords(in: tlvBytes)
                 ingestHistory(driver.ingest(notification: tlvBytes, reassembler: reassembler))
+                reportPackedTilingFailures()
             }
             return
         }
@@ -3315,6 +3337,7 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
         }
         observeUserInfoRecords(in: bytes)
         ingestHistory(driver.ingest(notification: bytes, reassembler: reassembler))
+        reportPackedTilingFailures()
     }
 
     /// The ring-time floor the 0x13 unit test disambiguates against: the persisted resume cursor, or the

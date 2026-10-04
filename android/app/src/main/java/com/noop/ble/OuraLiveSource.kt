@@ -1901,6 +1901,7 @@ class OuraLiveSource(
         }
         if (nonSecure.isNotEmpty()) {
             val records = reassembler.feed(IntArray(nonSecure.size) { nonSecure[it] })
+            reportPackedTilingFailures()
             for (rec in records) {
                 // HISTORY-LOG records (the live-HR path is ingestLiveHRPush via routeSecure): every
                 // envelope ring-time advances the drain's in-session continuation cursor (open_oura
@@ -1920,6 +1921,33 @@ class OuraLiveSource(
                 }
                 emit(events)
             }
+        }
+    }
+
+    /**
+     * ALWAYS-ON evidence (deliberately not Test-Centre-gated): a notification LONGER than one BLE
+     * packet that the strict tiling rejected, so [OuraReassembler.feed] kept its first packet and read
+     * no record from the rest of the value. Under the `3f` mask that fallback was the correct answer,
+     * because a notification was a single <= 20-byte packet; under the official app's `ff` the ring
+     * packs 10-17 records per notification, so the same fallback drops 9-16 of them and the loss is
+     * invisible - a history drain that looks like it worked and banks a tenth of the records
+     * (OURA_PROTOCOL.md s2.3). It costs a line only when it happens, and it is what is missing when
+     * someone reports thin history with no Test Centre enabled. This platform has not run a packed
+     * session on hardware, so it is the one that most needs the line.
+     *
+     * Reports only what it can attribute: the notification's length, its first 4 bytes (tag, `len` and
+     * two timestamp bytes - no payload, so no measurement of the wearer), how many of its bytes no
+     * record covered, and this session's running count. The reassembler rate-limits the reports (the
+     * first few, then one per decade), so a ring that packs nothing readable cannot flood the
+     * ring-buffered strap log. Twin of Swift's `reportPackedTilingFailures`.
+     */
+    private fun reportPackedTilingFailures() {
+        for (f in reassembler.takePackedTilingFailures()) {
+            val head = f.head.joinToString(" ") { "%02x".format(it) }
+            log(
+                "Oura: packed notification did not tile - ${f.length}B, head $head, " +
+                    "${f.unreadBytes}B of it unread, #${f.count} this session - kept the first packet only"
+            )
         }
     }
 

@@ -66,13 +66,13 @@ object OuraCommands {
     const val NOTIFICATION_MASK_DEFAULT = 0xFF
 
     /** SetNotification (enable all): `1c 01 <mask>`, `ff` by default. `00`=none, `3f`/`bf`=all. Per
-     *  OURA_PROTOCOL.md s4.1. A non-default mask carries its value in the label (`notify_all(3f)`) so the
-     *  `-> notify_all` strap-log line shows which session shape it ran under. Twin of Swift's
-     *  `enableAllNotifications(mask:)`. */
-    fun enableAllNotifications(mask: Int = NOTIFICATION_MASK_DEFAULT): OuraCommand {
-        val label = if (mask == NOTIFICATION_MASK_DEFAULT) "notify_all" else "notify_all(%02x)".format(mask)
-        return OuraCommand(label, intArrayOf(0x1C, 0x01, mask))
-    }
+     *  OURA_PROTOCOL.md s4.1. The label ALWAYS carries the mask it sent (`notify_all(ff)`), so the
+     *  `-> notify_all(..)` strap-log line names the session's framing shape by itself. It used to carry
+     *  the value only when the mask was non-default, which made a bare `-> notify_all` mean `3f` on a
+     *  build before the s2.3 default moved and `ff` on one after it - the same text for two session
+     *  shapes. Twin of Swift's `enableAllNotifications(mask:)`. */
+    fun enableAllNotifications(mask: Int = NOTIFICATION_MASK_DEFAULT): OuraCommand =
+        OuraCommand("notify_all(%02x)".format(mask), intArrayOf(0x1C, 0x01, mask))
 
     /** SetNotification (disable): `1c 01 00`. Per OURA_PROTOCOL.md s4.1. */
     fun disableNotifications(): OuraCommand =
