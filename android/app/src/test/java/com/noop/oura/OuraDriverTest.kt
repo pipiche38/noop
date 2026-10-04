@@ -47,7 +47,7 @@ class OuraDriverTest {
         // ready -> enable notifications + request nonce.
         val onReady = d.nextStep(OuraTransition.Ready)
         assertEquals(OuraDriverPhase.Authenticating, d.phase)
-        assertEquals(listOf("notify_all", "get_nonce"), onReady.map { it.label })
+        assertEquals(listOf("notify_all(ff)", "get_nonce"), onReady.map { it.label })
         assertArrayEquals(intArrayOf(0x1C, 0x01, 0xFF), onReady[0].bytes)   // the default mask, the official app's
         assertArrayEquals(intArrayOf(0x2F, 0x01, 0x2B), onReady[1].bytes)
 
@@ -174,7 +174,7 @@ class OuraDriverTest {
 
         // The ring acks with `25 01 00`; the transport calls back and the driver drives re-auth.
         val onAck = d.keyInstallAcknowledged()
-        assertEquals(listOf("notify_all", "get_nonce"), onAck.map { it.label })
+        assertEquals(listOf("notify_all(ff)", "get_nonce"), onAck.map { it.label })
         assertArrayEquals(intArrayOf(0x2F, 0x01, 0x2B), onAck[1].bytes)
         assertEquals(OuraDriverPhase.Authenticating, d.phase)
 
@@ -926,18 +926,24 @@ class OuraDriverTest {
 
     /** Twin of Swift's testDefaultNotificationMaskIsFfOnBothHandshakePaths: the default mask is the
      *  official app's `ff` on BOTH handshake paths (Ready and the post-install re-auth) with no injection,
-     *  and changes nothing else. An injected non-default mask still carries its value in the label. */
+     *  and changes nothing else. EVERY mask names itself in the label, default included, so a
+     *  `-> notify_all(..)` strap-log line attributes the session's framing shape by itself. */
     @Test
     fun testDefaultNotificationMaskIsFfOnBothHandshakePaths() {
         assertArrayEquals(intArrayOf(0x1C, 0x01, 0xFF), OuraCommands.enableAllNotifications().bytes)
-        assertEquals("notify_all", OuraCommands.enableAllNotifications().label)
+        assertEquals("notify_all(ff)", OuraCommands.enableAllNotifications().label)
         assertArrayEquals(intArrayOf(0x1C, 0x01, 0x3F), OuraCommands.enableAllNotifications(mask = 0x3F).bytes)
         assertEquals("notify_all(3f)", OuraCommands.enableAllNotifications(mask = 0x3F).label)
+        // No mask may render as a bare `notify_all`: that text meant `3f` before the s2.3 default moved
+        // and `ff` after it, so it cannot attribute a session on its own.
+        for (mask in 0..0xFF) {
+            assertEquals("notify_all(%02x)".format(mask), OuraCommands.enableAllNotifications(mask = mask).label)
+        }
 
         val d = OuraDriver(ringGen = OuraRingGen.GEN3, authKey = key)
         val onReady = d.nextStep(OuraTransition.Ready)
         assertEquals(OuraDriverPhase.Authenticating, d.phase)
-        assertEquals(listOf("notify_all", "get_nonce"), onReady.map { it.label })
+        assertEquals(listOf("notify_all(ff)", "get_nonce"), onReady.map { it.label })
         assertArrayEquals(intArrayOf(0x1C, 0x01, 0xFF), onReady[0].bytes)
         assertArrayEquals(intArrayOf(0x2F, 0x01, 0x2B), onReady[1].bytes)
 
@@ -946,7 +952,7 @@ class OuraDriverTest {
         assertEquals(emptyList<OuraCommand>(), installing.nextStep(OuraTransition.Ready))
         assertNotNull(installing.beginKeyInstall(key))
         val onAck = installing.keyInstallAcknowledged()
-        assertEquals(listOf("notify_all", "get_nonce"), onAck.map { it.label })
+        assertEquals(listOf("notify_all(ff)", "get_nonce"), onAck.map { it.label })
         assertArrayEquals(intArrayOf(0x1C, 0x01, 0xFF), onAck[0].bytes)
     }
 }

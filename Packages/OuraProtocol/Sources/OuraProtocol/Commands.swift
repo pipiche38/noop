@@ -66,11 +66,13 @@ public enum OuraCommands {
     public static let notificationMaskDefault: UInt8 = 0xFF
 
     /// SetNotification (enable all): `1c 01 <mask>`, `ff` by default. `00`=none, `3f`/`bf`=all. Per
-    /// OURA_PROTOCOL.md s4.1. A non-default mask carries its value in the label (`notify_all(3f)`) so the
-    /// `-> notify_all` strap-log line shows which session shape it ran under.
+    /// OURA_PROTOCOL.md s4.1. The label ALWAYS carries the mask it sent (`notify_all(ff)`), so the
+    /// `-> notify_all(..)` strap-log line names the session's framing shape by itself. It used to carry
+    /// the value only when the mask was non-default, which made a bare `-> notify_all` mean `3f` on a
+    /// build before the s2.3 default moved and `ff` on one after it - the same text for two session
+    /// shapes, resolvable only by cross-referencing the build marker.
     public static func enableAllNotifications(mask: UInt8 = notificationMaskDefault) -> OuraCommand {
-        let label = mask == notificationMaskDefault ? "notify_all" : String(format: "notify_all(%02x)", mask)
-        return OuraCommand(label: label, bytes: [0x1C, 0x01, mask])
+        return OuraCommand(label: String(format: "notify_all(%02x)", mask), bytes: [0x1C, 0x01, mask])
     }
 
     /// SetNotification (disable): `1c 01 00`. Per OURA_PROTOCOL.md s4.1.

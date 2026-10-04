@@ -114,9 +114,23 @@ Returned during history fetch (`0x10`/`0x11`) and live streaming. Each record: [
   radio-off catch-up drain (2026-10-02, 6 min 11 s) ran clean: no CRC, malformed or unknown-tag frames,
   battery drain unchanged at the same state of charge. NOOP therefore
   sends `ff` on every session (`OuraCommands.notificationMaskDefault`); the app's `16 01 02` write was not
-  needed. Nothing persists on the ring — the mask is re-sent on every session. Validated on a Gen 3 ring
+  needed. Nothing persists on the ring — the mask is re-sent on every session. The `0x1C` write names the
+  mask it sent on its own log line (`-> notify_all(ff)`), default included, so a session's framing shape is
+  attributable without cross-referencing the build. Validated on a Gen 3 ring
   over iOS only; Android runs the same packed walk (`Framing.kt`, unit-tested twin) without a hardware
   night yet.
+  **The failure mode packing makes reachable, and its evidence line.** `tiledRecords` rejects a value whole
+  on any irregularity, and `feed` then falls back to the ONE lenient packet. Under `3f` that was the correct
+  answer — a notification was a single ≤ 20-byte packet — but under `ff` the same fallback keeps one record
+  in ten to seventeen, and a drain that loses them still looks like it worked. So a notification LONGER than
+  one packet (`OuraFraming.singlePacketNotificationMaxLen` = 20, the default ATT MTU 23 less its 3-byte
+  header) that fails to tile is reported on an always-on line, not a Test-Centre-gated one:
+  `packed notification did not tile - <n>B, head <4 bytes>, <n>B of it unread, #<k> this session`. It states
+  only what it can attribute — the length, the tag/`len`/2 timestamp bytes (no payload, so nothing about the
+  wearer), how many bytes no record covered, and the session's running count — and the reassembler rate-limits
+  it to the first five plus one per decade, so a ring that packs nothing readable cannot flood a
+  ring-buffered strap log while the surviving line still carries the magnitude. Nothing in the parse reads
+  this state.
 
 ### 2.4 Multi-packet payloads
 There is no application-level fragmentation header beyond the TLV `len`. A record never spans two notifications in the verified corpus; each notification contains whole frames/records. NOOP's parser must still be defensive: buffer partial trailing bytes across notifications and only emit complete `2+len` records.
